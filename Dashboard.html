@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portafolio TI 2026 — CHRISTUS MUGUERZA</title>
+<link rel="stylesheet" href="/estilos.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-left">
+    <div class="logo-container">
+      <img src="logo.jpg" alt="CHRISTUS MUGUERZA" class="logo-img" onerror="this.style.display='none'; document.getElementById('logo-fallback').style.display='flex'">
+      <div class="logo" id="logo-fallback" style="display:none">CM</div>
+    </div>
+    <div class="header-divider"></div>
+    <div>
+      <div class="header-title">Portafolio Expansión TI 2026</div>
+      <div class="header-sub">CHRISTUS MUGUERZA — Dashboard de Seguimiento</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <span id="last-update" class="last-update"></span>
+    <button class="btn-outline" id="btn-auto" onclick="App.connectSharePoint()">
+      <i class="ti ti-refresh" aria-hidden="true"></i> Conectar SharePoint
+    </button>
+    <button class="btn-outline" onclick="document.getElementById('file-input').click()">
+      <i class="ti ti-upload" aria-hidden="true"></i> Cargar manual
+    </button>
+    <input type="file" id="file-input" accept=".xlsx,.xls" onchange="App.loadFile(event)" style="display:none">
+  </div>
+</header>
+
+<nav class="tabs" id="tabs"></nav>
+
+<main class="main" id="main">
+  <div class="empty-state">
+    <i class="ti ti-table-import empty-icon" aria-hidden="true"></i>
+    <div class="empty-title">Carga el archivo Excel del Portafolio</div>
+    <div class="empty-sub">Haz clic en "Conectar SharePoint" o "Cargar manual" para comenzar.</div>
+  </div>
+</main>
+
+<script src="scripts.js"></script>
+</body>
+</html>
