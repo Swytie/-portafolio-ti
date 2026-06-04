@@ -66,15 +66,17 @@ const App = {
 
 async fetchSharePoint() {
   try {
-    const res = await fetch(SHAREPOINT_URL, {credentials:'include', cache:'no-store'});
-    if (!res.ok) throw new Error(res.status);
+    const res = await fetch(SHAREPOINT_URL, {
+      mode: 'no-cors',
+      credentials: 'include',
+      cache: 'no-store'
+    });
     const buffer = await res.arrayBuffer();
     App.parseExcel(buffer);
     $('last-update').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX');
     return true;
   } catch(e) {
-    console.error('SharePoint error:', e);
-    alert('No se pudo conectar a SharePoint. Asegúrate de estar logueado en christusmx-my.sharepoint.com en esta misma ventana del navegador, luego intenta de nuevo.');
+    console.error('Error:', e);
     return false;
   }
 },
