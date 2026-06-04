@@ -6,7 +6,7 @@ const STATUS_COLORS = {
   'Inicio':'#A889AB','N/A':'#A889AB','-':'#A889AB','':'#A889AB'
 };
 
-const SHAREPOINT_URL = 'https://christusmx-my.sharepoint.com/:x:/g/personal/jorgez_guerrero_christus_mx/IQB2sHTOZELzSZnL9YDxAk-LAXYSs26VmOC0IKQxCU1lIAI?e=8i20Ff&download=1';
+const SHAREPOINT_URL = 'https://christusmx-my.sharepoint.com/:x:/r/personal/jorgez_guerrero_christus_mx/Documents/Prueba1/Copia%202026%20-%20Portafolio%20Expansi%C3%B3n%20TI.xlsx?d=wce74b076426449f399cbf580f1024f8b&csf=1&web=1&e=wkzqPY';
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
 
 let ALL = [], FILTERED = [], CHARTS = {};
