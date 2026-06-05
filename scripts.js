@@ -1,5 +1,5 @@
 const PM_SHEETS = ['Alexia C','Alexis L','Zaira F','Cynthia M','Alejandra R'];
-const PM_COLORS = ['#803F85','#9E5EA3','#1A9E6A','#C8A200','#D94040'];
+const PM_COLORS = ['#803F85','#2563EB','#1A9E6A','#C8A200','#D94040'];
 const STATUS_COLORS = {
   'Ejecución':'#2563EB','Activo':'#1A9E6A','Planeación':'#C8A200',
   'Cierre':'#1A9E6A','Cancelado':'#D94040','En aprobación':'#803F85',
@@ -14,6 +14,7 @@ let SORT_COL = '_monto', SORT_DIR = -1, SEARCH = '';
 let refreshTimer = null;
 
 const $ = id => document.getElementById(id);
+const pmColor = pm => PM_COLORS[PM_SHEETS.indexOf(pm)] || '#803F85';
 
 const fmt = v => {
   if (!v || isNaN(v)) return '—';
@@ -46,58 +47,63 @@ const desvStr = v => {
 const App = {
 
   splashConnect() {
-  document.getElementById('splash').classList.add('hide');
-  setTimeout(() => {
-    document.getElementById('splash').style.display = 'none';
-    App.connectSharePoint();
-  }, 500);
-},
+    const splash = document.getElementById('splash');
+    splash.classList.add('hide');
+    setTimeout(() => { splash.style.display = 'none'; App.connectSharePoint(); }, 500);
+  },
 
-splashManual() {
-  document.getElementById('splash-file').click();
-},
+  splashManual() {
+    document.getElementById('splash-file').click();
+  },
 
-splashFile(event) {
-  document.getElementById('splash').classList.add('hide');
-  setTimeout(() => {
-    document.getElementById('splash').style.display = 'none';
-    App.loadFile(event);
-  }, 500);
-},
+  splashFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      App.parseExcel(e.target.result);
+      $('last-update').textContent = 'Cargado: ' + new Date().toLocaleTimeString('es-MX');
+      const splash = document.getElementById('splash');
+      splash.classList.add('hide');
+      setTimeout(() => { splash.style.display = 'none'; }, 500);
+    };
+    reader.readAsArrayBuffer(file);
+  },
 
+  async connectSharePoint() {
+    const btn = document.getElementById('btn-auto');
+    btn.innerHTML = '<i class="ti ti-loader" aria-hidden="true"></i> Conectando...';
+    btn.disabled = true;
+    const ok = await App.fetchSharePoint();
+    if (ok) {
+      btn.innerHTML = '<i class="ti ti-refresh" aria-hidden="true"></i> Actualizar';
+      btn.disabled = false;
+      btn.onclick = () => App.fetchSharePoint();
+      if (refreshTimer) clearInterval(refreshTimer);
+      refreshTimer = setInterval(App.fetchSharePoint, AUTO_REFRESH_MS);
+    } else {
+      btn.innerHTML = '<i class="ti ti-upload" aria-hidden="true"></i> Cargar manual';
+      btn.disabled = false;
+      btn.onclick = () => document.getElementById('file-input').click();
+    }
+  },
 
-    async connectSharePoint() {
-  const btn = document.getElementById('btn-auto');
-  btn.innerHTML = '<i class="ti ti-loader" aria-hidden="true"></i> Conectando...';
-  btn.disabled = true;
-  const ok = await App.fetchSharePoint();
-  if (ok) {
-    btn.innerHTML = '<i class="ti ti-refresh" aria-hidden="true"></i> Actualizar';
-    btn.disabled = false;
-    btn.onclick = () => App.fetchSharePoint();
-    if (refreshTimer) clearInterval(refreshTimer);
-    refreshTimer = setInterval(App.fetchSharePoint, AUTO_REFRESH_MS);
-  } else {
-    btn.innerHTML = '<i class="ti ti-upload" aria-hidden="true"></i> Cargar manual';
-    btn.disabled = false;
-    btn.onclick = () => document.getElementById('file-input').click();
-  }
-},
-
-async fetchSharePoint() {
-  try {
-    const res = await fetch(SHAREPOINT_URL, {credentials:'include', cache:'no-store'});
-    if (!res.ok) throw new Error(res.status);
-    const buffer = await res.arrayBuffer();
-    App.parseExcel(buffer);
-    $('last-update').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX');
-    return true;
-  } catch(e) {
-    console.error('SharePoint error:', e);
-    alert('No se pudo conectar a SharePoint. Asegúrate de estar logueado en christusmx-my.sharepoint.com en esta misma ventana del navegador, luego intenta de nuevo.');
-    return false;
-  }
-},
+  async fetchSharePoint() {
+    try {
+      const res = await fetch(SHAREPOINT_URL, {credentials:'include', cache:'no-store'});
+      if (!res.ok) throw new Error(res.status);
+      const buffer = await res.arrayBuffer();
+      App.parseExcel(buffer);
+      $('last-update').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX');
+      const splash = document.getElementById('splash');
+      if (splash) { splash.classList.add('hide'); setTimeout(()=>{ splash.style.display='none'; },500); }
+      return true;
+    } catch(e) {
+      console.error('SharePoint error:', e);
+      alert('No se pudo conectar a SharePoint. Asegúrate de estar logueado en christusmx-my.sharepoint.com en esta misma ventana del navegador, luego intenta de nuevo.');
+      return false;
+    }
+  },
 
   loadFile(event) {
     const file = event.target.files[0];
@@ -170,17 +176,23 @@ async fetchSharePoint() {
   },
 
   buildTabs() {
-    const pms = [...new Set(ALL.map(d => d.pm))];
-    $('tabs').innerHTML = `
-      <div class="tab active" onclick="App.showTab('general')" id="tab-general">
-        <i class="ti ti-layout-dashboard" aria-hidden="true"></i> Vista General
-      </div>
-      ${pms.map(pm => `
+  const pms = [...new Set(ALL.map(d => d.pm))];
+  $('tabs').innerHTML = `
+    <div class="tab active" onclick="App.showTab('general')" id="tab-general">
+      <i class="ti ti-layout-dashboard" aria-hidden="true"></i> Vista General
+    </div>
+    ${pms.map(pm => {
+      const color = pmColor(pm);
+      return `
         <div class="tab" onclick="App.showTab('${pm}')" id="tab-${pm.replace(/ /g,'_')}">
-          <i class="ti ti-user-circle" aria-hidden="true"></i> ${pm}
-        </div>`).join('')}
-    `;
-  },
+          <span style="width:22px;height:22px;border-radius:50%;background:${color};color:#fff;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0">
+            <i class="ti ti-user" style="font-size:12px"></i>
+          </span>
+          ${pm}
+        </div>`;
+    }).join('')}
+  `;
+},
 
   showTab(tab) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -217,25 +229,25 @@ async fetchSharePoint() {
       <div class="charts-row">
         <div class="chart-card">
           <div class="chart-header"><i class="ti ti-chart-bar" aria-hidden="true"></i><span class="chart-title">Monto Aprobado TI por PM</span></div>
-          <div class="chart-wrap"><canvas id="ch-pm" role="img" aria-label="Monto aprobado TI por PM"></canvas></div>
+          <div class="chart-wrap"><canvas id="ch-pm"></canvas></div>
         </div>
         <div class="chart-card">
           <div class="chart-header"><i class="ti ti-chart-donut" aria-hidden="true"></i><span class="chart-title">Por Estado</span></div>
-          <div class="chart-wrap"><canvas id="ch-estado" role="img" aria-label="Proyectos por estado"></canvas></div>
+          <div class="chart-wrap"><canvas id="ch-estado"></canvas></div>
         </div>
         <div class="chart-card">
           <div class="chart-header"><i class="ti ti-chart-pie" aria-hidden="true"></i><span class="chart-title">RyR vs Estratégico</span></div>
-          <div class="chart-wrap"><canvas id="ch-tipo" role="img" aria-label="Proyectos por tipo"></canvas></div>
+          <div class="chart-wrap"><canvas id="ch-tipo"></canvas></div>
         </div>
       </div>
       <div class="charts-row-2">
         <div class="chart-card">
           <div class="chart-header"><i class="ti ti-chart-bar" aria-hidden="true"></i><span class="chart-title">Fase de los Proyectos</span></div>
-          <div class="chart-wrap-lg"><canvas id="ch-fase" role="img" aria-label="Proyectos por fase"></canvas></div>
+          <div class="chart-wrap-lg"><canvas id="ch-fase"></canvas></div>
         </div>
         <div class="chart-card">
           <div class="chart-header"><i class="ti ti-trending-up" aria-hidden="true"></i><span class="chart-title">Avance Real vs Planeado por PM</span></div>
-          <div class="chart-wrap-lg"><canvas id="ch-avance" role="img" aria-label="Avance real vs planeado"></canvas></div>
+          <div class="chart-wrap-lg"><canvas id="ch-avance"></canvas></div>
         </div>
       </div>
       <div class="table-card">
@@ -292,11 +304,11 @@ async fetchSharePoint() {
     const avg     = activos.length ? activos.reduce((s,d)=>s+d._pct,0)/activos.length : 0;
     const pctE    = monto > 0 ? Math.round(erogado/monto*100) : 0;
     $('kpis').innerHTML = `
-      <div class="kpi"><i class="ti ti-briefcase kpi-icon" aria-hidden="true"></i><div class="kpi-label">Total Proyectos</div><div class="kpi-val">${data.length}</div><div class="kpi-sub">${activos.length} activos</div></div>
-      <div class="kpi"><i class="ti ti-coin kpi-icon" aria-hidden="true"></i><div class="kpi-label">Monto Aprobado TI</div><div class="kpi-val">${fmt(monto)}</div><div class="kpi-sub">MXN</div></div>
-      <div class="kpi"><i class="ti ti-receipt kpi-icon" aria-hidden="true"></i><div class="kpi-label">Erogado</div><div class="kpi-val">${fmt(erogado)}</div><div class="kpi-sub">${pctE}% del monto</div><div class="kpi-bar"><div class="kpi-bar-fill" style="width:${Math.min(pctE,100)}%"></div></div></div>
-      <div class="kpi"><i class="ti ti-credit-card kpi-icon" aria-hidden="true"></i><div class="kpi-label">Comprometido</div><div class="kpi-val">${fmt(comp)}</div><div class="kpi-sub">MXN</div></div>
-      <div class="kpi"><i class="ti ti-trending-up kpi-icon" aria-hidden="true"></i><div class="kpi-label">Avance Promedio</div><div class="kpi-val">${pct(avg)}</div><div class="kpi-sub">proyectos activos</div><div class="kpi-bar"><div class="kpi-bar-fill" style="width:${Math.round(avg*100)}%"></div></div></div>`;
+      <div class="kpi"><i class="ti ti-briefcase kpi-icon"></i><div class="kpi-label">Total Proyectos</div><div class="kpi-val">${data.length}</div><div class="kpi-sub">${activos.length} activos</div></div>
+      <div class="kpi"><i class="ti ti-coin kpi-icon"></i><div class="kpi-label">Monto Aprobado TI</div><div class="kpi-val">${fmt(monto)}</div><div class="kpi-sub">MXN</div></div>
+      <div class="kpi"><i class="ti ti-receipt kpi-icon"></i><div class="kpi-label">Erogado</div><div class="kpi-val">${fmt(erogado)}</div><div class="kpi-sub">${pctE}% del monto</div><div class="kpi-bar"><div class="kpi-bar-fill" style="width:${Math.min(pctE,100)}%"></div></div></div>
+      <div class="kpi"><i class="ti ti-credit-card kpi-icon"></i><div class="kpi-label">Comprometido</div><div class="kpi-val">${fmt(comp)}</div><div class="kpi-sub">MXN</div></div>
+      <div class="kpi"><i class="ti ti-trending-up kpi-icon"></i><div class="kpi-label">Avance Promedio</div><div class="kpi-val">${pct(avg)}</div><div class="kpi-sub">proyectos activos</div><div class="kpi-bar"><div class="kpi-bar-fill" style="width:${Math.round(avg*100)}%"></div></div></div>`;
   },
 
   renderStatusGrid(data) {
@@ -321,7 +333,7 @@ async fetchSharePoint() {
     const montos = pms.map(p=>data.filter(d=>d.pm===p).reduce((s,d)=>s+d._monto,0));
     CHARTS.pm = new Chart($('ch-pm'), {
       type:'bar',
-      data:{labels:pms, datasets:[{data:montos, backgroundColor:PM_COLORS, borderRadius:5}]},
+      data:{labels:pms, datasets:[{data:montos, backgroundColor:pms.map(p=>pmColor(p)), borderRadius:5}]},
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
         scales:{x:{ticks:{font:{size:10}}}, y:{ticks:{callback:v=>fmt(v),font:{size:9}}}}}
     });
@@ -363,7 +375,7 @@ async fetchSharePoint() {
     CHARTS.avance = new Chart($('ch-avance'), {
       type:'bar',
       data:{labels:pmsAvance, datasets:[
-        {label:'Real', data:realAvg, backgroundColor:'#803F85', borderRadius:4},
+        {label:'Real', data:realAvg, backgroundColor:pmsAvance.map(p=>pmColor(p)), borderRadius:4},
         {label:'Planeado', data:planAvg, backgroundColor:'#E8DCE9', borderRadius:4},
       ]},
       options:{responsive:true, maintainAspectRatio:false,
@@ -375,6 +387,7 @@ async fetchSharePoint() {
   renderPM(pm) {
     const data = ALL.filter(d => d.pm === pm);
     const ini = pm.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+    const color = pmColor(pm);
     const totalMonto = data.reduce((s,d)=>s+d._monto,0);
     const totalErog  = data.reduce((s,d)=>s+d._erogado,0);
     const totalDisp  = data.reduce((s,d)=>s+d._disponible,0);
@@ -384,46 +397,46 @@ async fetchSharePoint() {
     const desv       = avg - avgPlan;
     const unidades   = [...new Set(data.map(d=>d._unidad).filter(Boolean))];
     $('main').innerHTML = `
-      <div class="pm-header">
-        <div class="pm-avatar">${ini}</div>
+      <div class="pm-header" style="border-left:4px solid ${color}">
+        <div class="pm-avatar" style="background:${color}">${ini}</div>
         <div>
           <div class="pm-name">${pm}</div>
           <div class="pm-meta">
-            <span><i class="ti ti-briefcase" aria-hidden="true"></i> ${data.length} proyectos</span>
-            <span><i class="ti ti-building-hospital" aria-hidden="true"></i> ${unidades.length} unidades</span>
-            <span><i class="ti ti-trending-up" aria-hidden="true"></i> ${pct(avg)} avance</span>
-            <span class="${desvClass(desv)}"><i class="ti ti-arrows-diff" aria-hidden="true"></i> Desviación: ${desvStr(desv)}</span>
+            <span><i class="ti ti-briefcase"></i> ${data.length} proyectos</span>
+            <span><i class="ti ti-building-hospital"></i> ${unidades.length} unidades</span>
+            <span><i class="ti ti-trending-up"></i> ${pct(avg)} avance</span>
+            <span class="${desvClass(desv)}"><i class="ti ti-arrows-diff"></i> Desviación: ${desvStr(desv)}</span>
           </div>
         </div>
         <div class="pm-header-kpis">
-          <div class="pm-mini-kpi"><span class="pm-mini-label"><i class="ti ti-coin" aria-hidden="true"></i> Monto Aprobado TI</span><span class="pm-mini-val">${fmt(totalMonto)}</span></div>
-          <div class="pm-mini-kpi"><span class="pm-mini-label"><i class="ti ti-receipt" aria-hidden="true"></i> Erogado</span><span class="pm-mini-val">${fmt(totalErog)}</span></div>
-          <div class="pm-mini-kpi"><span class="pm-mini-label"><i class="ti ti-wallet" aria-hidden="true"></i> Disponible</span><span class="pm-mini-val">${fmt(totalDisp)}</span></div>
+          <div class="pm-mini-kpi"><span class="pm-mini-label"><i class="ti ti-coin"></i> Monto Aprobado TI</span><span class="pm-mini-val" style="color:${color}">${fmt(totalMonto)}</span></div>
+          <div class="pm-mini-kpi"><span class="pm-mini-label"><i class="ti ti-receipt"></i> Erogado</span><span class="pm-mini-val" style="color:${color}">${fmt(totalErog)}</span></div>
+          <div class="pm-mini-kpi"><span class="pm-mini-label"><i class="ti ti-wallet"></i> Disponible</span><span class="pm-mini-val" style="color:${color}">${fmt(totalDisp)}</span></div>
         </div>
-        <button class="btn-primary" onclick="App.exportMSR()" style="margin-left:auto">
-          <i class="ti ti-file-download" aria-hidden="true"></i> Exportar MSR_R
+        <button class="btn-primary" onclick="App.exportMSR()" style="margin-left:auto;background:${color}">
+          <i class="ti ti-file-download"></i> Exportar MSR_R
         </button>
       </div>
       <div class="charts-row">
         <div class="chart-card">
-          <div class="chart-header"><i class="ti ti-chart-bar" aria-hidden="true"></i><span class="chart-title">Monto por Unidad</span></div>
-          <div class="chart-wrap"><canvas id="ch-pm" role="img" aria-label="Monto por unidad"></canvas></div>
+          <div class="chart-header"><i class="ti ti-chart-bar"></i><span class="chart-title">Monto por Unidad</span></div>
+          <div class="chart-wrap"><canvas id="ch-pm"></canvas></div>
         </div>
         <div class="chart-card">
-          <div class="chart-header"><i class="ti ti-chart-donut" aria-hidden="true"></i><span class="chart-title">Por Estado</span></div>
-          <div class="chart-wrap"><canvas id="ch-estado" role="img" aria-label="Proyectos por estado"></canvas></div>
+          <div class="chart-header"><i class="ti ti-chart-donut"></i><span class="chart-title">Por Estado</span></div>
+          <div class="chart-wrap"><canvas id="ch-estado"></canvas></div>
         </div>
         <div class="chart-card">
-          <div class="chart-header"><i class="ti ti-chart-pie" aria-hidden="true"></i><span class="chart-title">Por Fase</span></div>
-          <div class="chart-wrap"><canvas id="ch-tipo" role="img" aria-label="Proyectos por fase"></canvas></div>
+          <div class="chart-header"><i class="ti ti-chart-pie"></i><span class="chart-title">Por Fase</span></div>
+          <div class="chart-wrap"><canvas id="ch-tipo"></canvas></div>
         </div>
       </div>
       <div class="table-card">
         <div class="table-header">
-          <div class="table-header-left"><i class="ti ti-table" aria-hidden="true"></i><span class="table-title">Proyectos de ${pm}</span></div>
+          <div class="table-header-left"><i class="ti ti-table"></i><span class="table-title">Proyectos de ${pm}</span></div>
           <div style="display:flex;align-items:center;gap:8px">
             <div class="search-box">
-              <i class="ti ti-search" aria-hidden="true"></i>
+              <i class="ti ti-search"></i>
               <input type="text" id="search-input" placeholder="Buscar proyecto..." oninput="App.onSearch(this.value)">
             </div>
             <span class="table-count" id="tbl-count"></span>
@@ -432,17 +445,17 @@ async fetchSharePoint() {
         <div class="table-scroll"><div id="tbl"></div></div>
       </div>`;
     FILTERED = data;
-    App.renderChartsPM(data);
+    App.renderChartsPM(data, color);
     App.renderTable(data);
   },
 
-  renderChartsPM(data) {
+  renderChartsPM(data, color) {
     App.destroyCharts();
     const uds = [...new Set(data.map(d=>d._unidad).filter(Boolean))];
     const montos = uds.map(u=>data.filter(d=>d._unidad===u).reduce((s,d)=>s+d._monto,0));
     CHARTS.pm = new Chart($('ch-pm'), {
       type:'bar',
-      data:{labels:uds, datasets:[{data:montos, backgroundColor:'#803F85', borderRadius:5}]},
+      data:{labels:uds, datasets:[{data:montos, backgroundColor:color||'#803F85', borderRadius:5}]},
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
         scales:{x:{ticks:{font:{size:9},maxRotation:30}}, y:{ticks:{callback:v=>fmt(v),font:{size:9}}}}}
     });
@@ -514,7 +527,7 @@ async fetchSharePoint() {
         <tbody>${sorted.map(d=>`
           <tr>
             <td title="${d._nombre}">${d._nombre||'—'}</td>
-            <td><span class="chip">${d.pm}</span></td>
+            <td><span class="chip" style="background:${pmColor(d.pm)}18;color:${pmColor(d.pm)};border:1px solid ${pmColor(d.pm)}33">${d.pm}</span></td>
             <td title="${d._unidad}">${d._unidad||'—'}</td>
             <td>${d._fase||'—'}</td>
             <td><span class="badge ${badgeClass(d._estado)}">${d._estado||'—'}</span></td>
@@ -522,7 +535,7 @@ async fetchSharePoint() {
             <td>${fmt(d._monto)}</td>
             <td>${fmt(d._erogado)}</td>
             <td>${fmt(d._disponible)}</td>
-            <td><div class="prog"><div class="prog-bar"><div class="prog-fill" style="width:${Math.round((d._pct||0)*100)}%"></div></div><span class="prog-val">${pct(d._pct)}</span></div></td>
+            <td><div class="prog"><div class="prog-bar"><div class="prog-fill" style="width:${Math.round((d._pct||0)*100)}%;background:${pmColor(d.pm)}"></div></div><span class="prog-val">${pct(d._pct)}</span></div></td>
             <td><span class="prog-val">${pct(d._pct_plan)}</span></td>
             <td><span class="${desvClass(d._desviacion)}">${desvStr(d._desviacion)}</span></td>
           </tr>`).join('')}
