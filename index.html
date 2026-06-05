@@ -4,12 +4,52 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Portafolio TI 2026 — CHRISTUS MUGUERZA</title>
-<link rel="stylesheet" href="estilos.css">
+<link rel="stylesheet" href="/estilos.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 </head>
 <body>
+
+<div class="splash" id="splash">
+  <div class="splash-card">
+    <div class="splash-panel-l">
+      <div class="splash-logo-box">
+        <img src="logo.jpg" alt="CHRISTUS MUGUERZA"
+             onerror="this.style.display='none'; this.parentElement.style.display='none'; document.getElementById('splash-cm').style.display='block'">
+      </div>
+      <div class="splash-logo-cm" id="splash-cm" style="display:none">CM</div>
+      <div class="splash-l-area">Dirección de Tecnologías de la Información</div>
+      <div class="splash-l-title">
+        Portafolio Expansión TI 2026
+        <em>CHRISTUS MUGUERZA · Sistema de Salud</em>
+      </div>
+    </div>
+    <div class="splash-panel-r">
+      <div class="splash-welcome">Bienvenido</div>
+      <div class="splash-desc">Selecciona cómo deseas cargar los datos del portafolio para comenzar.</div>
+      <button class="splash-btn-primary" onclick="App.splashConnect()">
+        <div class="splash-btn-icon"><i class="ti ti-refresh" aria-hidden="true"></i></div>
+        <div>
+          <div class="splash-btn-label">Conectar SharePoint</div>
+          <div class="splash-btn-sub">Sincronización automática</div>
+        </div>
+      </button>
+      <button class="splash-btn-secondary" onclick="App.splashManual()">
+        <div class="splash-btn-icon-sec"><i class="ti ti-upload" aria-hidden="true"></i></div>
+        <div>
+          <div class="splash-btn-label">Cargar archivo Excel</div>
+          <div class="splash-btn-sub">Carga manual desde tu equipo</div>
+        </div>
+      </button>
+      <div class="splash-hint">
+        <i class="ti ti-shield-lock" aria-hidden="true"></i>
+        Acceso restringido — solo personal autorizado de CHRISTUS MUGUERZA
+      </div>
+    </div>
+  </div>
+  <input type="file" id="splash-file" accept=".xlsx,.xls" onchange="App.splashFile(event)" style="display:none">
+</div>
 
 <header class="header">
   <div class="header-left">
