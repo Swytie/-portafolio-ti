@@ -6,7 +6,7 @@ const STATUS_COLORS = {
   'Inicio':'#A889AB','N/A':'#A889AB','-':'#A889AB','':'#A889AB'
 };
 
-const SHAREPOINT_URL = 'https://christusmx-my.sharepoint.com/:x:/r/personal/jorgez_guerrero_christus_mx/Documents/Prueba1/Copia%202026%20-%20Portafolio%20Expansi%C3%B3n%20TI.xlsx?d=wce74b076426449f399cbf580f1024f8b&csf=1&web=1&e=wkzqPY';
+const SHAREPOINT_URL = 'https://christusmx-my.sharepoint.com/:x:/g/personal/jorgez_guerrero_christus_mx/IQB2sHTOZELzSZnL9YDxAk-LAXYSs26VmOC0IKQxCU1lIAI?e=8i20Ff&download=1';
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
 
 let ALL = [], FILTERED = [], CHARTS = {};
@@ -45,6 +45,26 @@ const desvStr = v => {
 
 const App = {
 
+  splashConnect() {
+  document.getElementById('splash').classList.add('hide');
+  setTimeout(() => {
+    document.getElementById('splash').style.display = 'none';
+    App.connectSharePoint();
+  }, 500);
+},
+
+splashManual() {
+  document.getElementById('splash-file').click();
+},
+
+splashFile(event) {
+  document.getElementById('splash').classList.add('hide');
+  setTimeout(() => {
+    document.getElementById('splash').style.display = 'none';
+    App.loadFile(event);
+  }, 500);
+},
+
 
     async connectSharePoint() {
   const btn = document.getElementById('btn-auto');
@@ -66,17 +86,15 @@ const App = {
 
 async fetchSharePoint() {
   try {
-    const res = await fetch(SHAREPOINT_URL, {
-      mode: 'no-cors',
-      credentials: 'include',
-      cache: 'no-store'
-    });
+    const res = await fetch(SHAREPOINT_URL, {credentials:'include', cache:'no-store'});
+    if (!res.ok) throw new Error(res.status);
     const buffer = await res.arrayBuffer();
     App.parseExcel(buffer);
     $('last-update').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX');
     return true;
   } catch(e) {
-    console.error('Error:', e);
+    console.error('SharePoint error:', e);
+    alert('No se pudo conectar a SharePoint. Asegúrate de estar logueado en christusmx-my.sharepoint.com en esta misma ventana del navegador, luego intenta de nuevo.');
     return false;
   }
 },
