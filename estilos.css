@@ -173,7 +173,7 @@ body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--t
 }
 .header-left { display: flex; align-items: center; gap: 14px; }
 .logo-container { display: flex; align-items: center; }
-.logo-img { height: 82px; width: auto; object-fit: contain; background: #fff; border-radius: 8px; padding: 4px 8px; }
+.logo-img { height: 42px; width: auto; object-fit: contain; background: #fff; border-radius: 8px; padding: 4px 8px; }
 .logo { width: 38px; height: 38px; background: #fff; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--p); font-size: 13px; }
 .header-divider { width: 1px; height: 28px; background: rgba(255,255,255,.2); }
 .header-title { color: #fff; font-size: 15px; font-weight: 600; }
