@@ -319,3 +319,10 @@ tr:hover td { background: var(--p-pale); }
   .charts-row { grid-template-columns: 1.6fr 1fr 1fr; }
   .splash-panel-r { padding: 4rem 10rem; }
 }
+.tbl-filter-bar { padding: .5rem 1rem; border-bottom: 1px solid var(--border); background: var(--bg); }
+.tbl-filter-inner { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tbl-fsel { font-size: 11px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--t1); font-family: inherit; cursor: pointer; }
+.tbl-fsel:focus { outline: none; border-color: var(--p); }
+.tbl-clear-btn { font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--t2); font-family: inherit; cursor: pointer; display: flex; align-items: center; gap: 4px; transition: border-color .2s; }
+.tbl-clear-btn:hover { border-color: var(--red); color: var(--red); }
+.status-grid { display: grid; grid-template-columns: repeat(6,1fr); gap: 10px; margin-bottom: 1rem; }
