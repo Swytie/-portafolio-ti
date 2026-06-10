@@ -11,7 +11,9 @@ const AUTO_REFRESH_MS = 5 * 60 * 1000;
 
 let ALL = [], FILTERED = [], CHARTS = {};
 let SORT_COL = '_monto', SORT_DIR = -1, SEARCH = '';
+let TBL_FILTERS = {pm:'', tipo:'', fase:'', unidad:'', estado:''};
 let refreshTimer = null;
+let MACTI_PCT = null;
 
 const $ = id => document.getElementById(id);
 const pmColor = pm => PM_COLORS[PM_SHEETS.indexOf(pm)] || '#803F85';
@@ -37,7 +39,7 @@ const badgeClass = e => {
   if (s.includes('apro')||s.includes('inicio')) return 'b-apro';
   return 'b-other';
 };
-const desvClass = v => v > 0 ? 'desv-pos' : v < -0.05 ? 'desv-neg' : 'desv-ok';
+const desvClass = v => v > 0 ? 'desv-ok' : v < -0.1 ? 'desv-neg' : v < 0 ? 'desv-pos' : 'desv-ok';
 const desvStr = v => {
   if (!v && v !== 0) return '—';
   const p = Math.round(v * 100);
@@ -72,17 +74,17 @@ const App = {
 
   async connectSharePoint() {
     const btn = document.getElementById('btn-auto');
-    btn.innerHTML = '<i class="ti ti-loader" aria-hidden="true"></i> Conectando...';
+    btn.innerHTML = '<i class="ti ti-loader"></i> Conectando...';
     btn.disabled = true;
     const ok = await App.fetchSharePoint();
     if (ok) {
-      btn.innerHTML = '<i class="ti ti-refresh" aria-hidden="true"></i> Actualizar';
+      btn.innerHTML = '<i class="ti ti-refresh"></i> Actualizar';
       btn.disabled = false;
       btn.onclick = () => App.fetchSharePoint();
       if (refreshTimer) clearInterval(refreshTimer);
       refreshTimer = setInterval(App.fetchSharePoint, AUTO_REFRESH_MS);
     } else {
-      btn.innerHTML = '<i class="ti ti-upload" aria-hidden="true"></i> Cargar manual';
+      btn.innerHTML = '<i class="ti ti-upload"></i> Cargar manual';
       btn.disabled = false;
       btn.onclick = () => document.getElementById('file-input').click();
     }
@@ -116,96 +118,130 @@ const App = {
     reader.readAsArrayBuffer(file);
   },
 
+  parseMACTI(wb) {
+  if (!wb.SheetNames.includes('MACTI Checklist')) return;
+  const raw = XLSX.utils.sheet_to_json(wb.Sheets['MACTI Checklist'], {header:1, defval:''});
+  let totalReq = 0, totalSub = 0;
+  window._mactiMap = {};
+  const clean = v => String(v||'').replace(/[\u202a\u202b\u202c\u202d\u202e\u200b\u200c\u200d\ufeff]/g,'').trim();
+  for (let i = 3; i < raw.length; i++) {
+    const row = raw[i];
+    const id     = clean(row[2]);
+    const nombre = clean(row[3]).toLowerCase();
+    const req    = typeof row[10] === 'number' ? row[10] : 0;
+    const sub    = typeof row[11] === 'number' ? row[11] : 0;
+    if (req > 0) { totalReq += req; totalSub += sub; }
+    if (req > 0) {
+      const val = Math.round((sub / req) * 10000) / 100;
+      if (id && id !== '' && id !== 'None' && id !== '-') window._mactiMap[id] = val;
+      if (nombre) window._mactiMap[nombre] = val;
+    }
+  }
+  MACTI_PCT = totalReq > 0 ? Math.round((totalSub / totalReq) * 10000) / 100 : null;
+},
+
+
   parseExcel(buffer) {
-    const wb = XLSX.read(buffer, {type:'array'});
-    ALL = [];
-    PM_SHEETS.forEach(sheet => {
-      if (!wb.SheetNames.includes(sheet)) return;
-      const raw = XLSX.utils.sheet_to_json(wb.Sheets[sheet], {header:1, defval:''});
-      let hdr = -1;
-      for (let i = 0; i < raw.length; i++) {
-        if (raw[i].some(c => String(c).includes('Tipo de') || String(c).includes('Nombre del') || String(c).includes('Esfuerzo'))) { hdr = i; break; }
-      }
-      if (hdr < 0) return;
-      const hdrs = raw[hdr];
-      const SKIP = ['Gerencia TI','Gerencia Expansión TI','Información general','Tipo de Esfuerzo','Tipo de esfuerzo'];
-      const isAlejandra = sheet === 'Alejandra R';
-      const tipoCol = isAlejandra ? 1 : 0;
-      for (let i = hdr+1; i < raw.length; i++) {
-        const row = raw[i];
-        const tipo = String(row[tipoCol]||'').trim();
-        if (!tipo || tipo === 'nan' || SKIP.includes(tipo)) continue;
-        const obj = {pm: sheet, tipo};
-        hdrs.forEach((h,idx) => { obj[String(h).trim()] = row[idx] ?? ''; });
-        const find = (...keys) => {
-          for (const k of keys) {
-            const h = hdrs.find(h => String(h).toLowerCase().includes(k.toLowerCase()));
-            if (h !== undefined) return obj[String(h).trim()];
-          }
-          return '';
-        };
-        obj._nombre       = String(find('Nombre del proyecto','Nombre de proyecto')||'').trim();
-        obj._unidad       = String(find('Unidades a desplegar','Unidad')||'').trim();
-        obj._fase         = String(find('Fase actual','Fase')||'').trim();
-        obj._estado       = String(find('Estado','Estatus')||'').trim();
-        obj._tipo_proy    = String(find('Tipo de Proyecto','Tipo de proyecto')||'').trim();
-        obj._pct          = toNum(find('% real','% Real','%Real'));
-        obj._pct_plan     = toNum(find('% planeado','% Planeado'));
-        obj._desviacion   = obj._pct - obj._pct_plan;
-        obj._monto        = toNum(find('Monto Aprobado TI','Monto TI','Monto aprobado TI'));
-        obj._erogado      = toNum(find('Presupuesto erogado'));
-        obj._comprometido = toNum(find('Presupuesto Comprometido','Presupuesto comprometido'));
-        obj._disponible   = toNum(find('Presupuesto Disponible','Presupuesto disponible'));
-        obj._rrpp         = String(find('RRPP')||'').trim();
-        obj._id           = String(find('# Proyecto en Oracle','# Proyecto','# proyecto en Oracle')||'').trim();
-        obj._direccion    = String(find('Dirección solicitante','Dirección')||'').trim();
-        obj._lider        = String(find('Lider TI','Líder TI')||'').trim();
-        obj._fecha_ini    = find('Fecha de inicio');
-        obj._fecha_cie    = find('Fecha de cierre');
-        obj._fecha_golive = find('Fecha Go Live');
-        obj._comentarios  = String(find('Descripción','Comentarios')||'').trim();
-        obj._sponsor      = String(find('Sponsor')||'').trim();
-        obj._pm_gestor    = String(find('PM / Gestor','PM/Gestor')||'').trim();
-        obj._ruta_critica = String(find('Ruta Crítica','RUTA CRÍTICA')||'').trim();
-        obj._tipo_servicio= String(find('Tipo de Servicio')||'').trim();
-        if (obj._nombre && obj._nombre !== 'nan') ALL.push(obj);
-      }
-    });
-    App.buildTabs();
-    App.showTab('general');
-  },
+  const wb = XLSX.read(buffer, {type:'array'});
+  ALL = [];
+  App.parseMACTI(wb);
+  PM_SHEETS.forEach(sheet => {
+    if (!wb.SheetNames.includes(sheet)) return;
+    const raw = XLSX.utils.sheet_to_json(wb.Sheets[sheet], {header:1, defval:''});
+    let hdr = -1;
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i].some(c => String(c).includes('Tipo de') || String(c).includes('Nombre del') || String(c).includes('Esfuerzo'))) { hdr = i; break; }
+    }
+    if (hdr < 0) return;
+    const hdrs = raw[hdr];
+    const SKIP = ['Gerencia TI','Gerencia Expansión TI','Información general','Tipo de Esfuerzo','Tipo de esfuerzo'];
+    const isAlejandra = sheet === 'Alejandra R';
+    const tipoCol = isAlejandra ? 1 : 0;
+    const cleanStr = v => String(v||'').replace(/[\u202a\u202b\u202c\u202d\u202e\u200b\u200c\u200d\ufeff]/g,'').trim();
+    for (let i = hdr+1; i < raw.length; i++) {
+      const row = raw[i];
+      const tipo = String(row[tipoCol]||'').trim();
+      if (!tipo || tipo === 'nan' || SKIP.includes(tipo)) continue;
+      const obj = {pm: sheet, tipo};
+      hdrs.forEach((h,idx) => { obj[String(h).trim()] = row[idx] ?? ''; });
+      const find = (...keys) => {
+        for (const k of keys) {
+          const h = hdrs.find(h => String(h).toLowerCase().includes(k.toLowerCase()));
+          if (h !== undefined) return obj[String(h).trim()];
+        }
+        return '';
+      };
+      obj._nombre       = cleanStr(find('Nombre del proyecto','Nombre de proyecto'));
+      obj._unidad       = cleanStr(find('Unidades a desplegar','Unidad'));
+      obj._fase         = cleanStr(find('Fase actual','Fase'));
+      obj._estado       = cleanStr(find('Estado','Estatus'));
+      obj._tipo_proy    = cleanStr(find('Tipo de Proyecto','Tipo de proyecto'));
+      obj._pct          = toNum(find('% real','% Real','%Real'));
+      obj._pct_plan     = toNum(find('% planeado','% Planeado'));
+      obj._desviacion   = obj._pct - obj._pct_plan;
+      obj._monto        = toNum(find('Monto Aprobado TI','Monto TI','Monto aprobado TI'));
+      obj._erogado      = toNum(find('Presupuesto erogado'));
+      obj._comprometido = toNum(find('Presupuesto Comprometido','Presupuesto comprometido'));
+      obj._disponible   = toNum(find('Presupuesto Disponible','Presupuesto disponible'));
+      obj._rrpp         = cleanStr(find('RRPP'));
+      obj._id           = cleanStr(find('# Proyecto en Oracle','# Proyecto','# proyecto en Oracle'));
+      obj._direccion    = cleanStr(find('Dirección solicitante','Dirección'));
+      obj._lider        = cleanStr(find('Lider TI','Líder TI'));
+      obj._fecha_ini    = find('Fecha de inicio');
+      obj._fecha_cie    = find('Fecha de cierre');
+      obj._fecha_golive = find('Fecha Go Live');
+      obj._comentarios  = cleanStr(find('Descripción','Comentarios'));
+      obj._sponsor      = cleanStr(find('Sponsor'));
+      obj._pm_gestor    = cleanStr(find('PM / Gestor','PM/Gestor'));
+      obj._ruta_critica = cleanStr(find('Ruta Crítica','RUTA CRÍTICA'));
+      obj._tipo_servicio= cleanStr(find('Tipo de Servicio'));
+      obj._es_iniciativa = String(obj._fecha_golive||'').toUpperCase().includes('INICIATIVA');
+      obj._tiene_rrpp    = obj._rrpp && obj._rrpp !== '-' && obj._rrpp !== '' && obj._rrpp !== 'nan';
+      const cleanId     = obj._id && obj._id !== '-' && obj._id !== '' && obj._id !== 'nan' ? obj._id : null;
+      const cleanNombre = obj._nombre.toLowerCase();
+      const mactiKey    = cleanId || cleanNombre;
+      obj._macti = (window._mactiMap && mactiKey && window._mactiMap[mactiKey] !== undefined)
+        ? window._mactiMap[mactiKey]
+        : null;
+      if (obj._nombre && obj._nombre !== 'nan') ALL.push(obj);
+    }
+  });
+  App.buildTabs();
+  App.showTab('general');
+},
 
   buildTabs() {
-  const pms = [...new Set(ALL.map(d => d.pm))];
-  $('tabs').innerHTML = `
-    <div class="tab active" onclick="App.showTab('general')" id="tab-general">
-      <i class="ti ti-layout-dashboard" aria-hidden="true"></i> Vista General
-    </div>
-    ${pms.map(pm => {
-      const color = pmColor(pm);
-      return `
-        <div class="tab" onclick="App.showTab('${pm}')" id="tab-${pm.replace(/ /g,'_')}">
-          <span style="width:22px;height:22px;border-radius:50%;background:${color};color:#fff;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0">
-            <i class="ti ti-user" style="font-size:12px"></i>
-          </span>
-          ${pm}
-        </div>`;
-    }).join('')}
-  `;
-},
+    const pms = [...new Set(ALL.map(d => d.pm))];
+    $('tabs').innerHTML = `
+      <div class="tab active" onclick="App.showTab('general')" id="tab-general">
+        <i class="ti ti-layout-dashboard"></i> Vista General
+      </div>
+      ${pms.map(pm => {
+        const color = pmColor(pm);
+        return `
+          <div class="tab" onclick="App.showTab('${pm}')" id="tab-${pm.replace(/ /g,'_')}">
+            <span style="width:22px;height:22px;border-radius:50%;background:${color};color:#fff;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0">
+              <i class="ti ti-user" style="font-size:12px"></i>
+            </span>
+            ${pm}
+          </div>`;
+      }).join('')}
+    `;
+  },
 
   showTab(tab) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     const tid = tab === 'general' ? 'tab-general' : 'tab-'+tab.replace(/ /g,'_');
     if ($(tid)) $(tid).classList.add('active');
     SEARCH = ''; SORT_COL = '_monto'; SORT_DIR = -1;
+    TBL_FILTERS = {pm:'', tipo:'', fase:'', unidad:'', estado:''};
     tab === 'general' ? App.renderGeneral() : App.renderPM(tab);
   },
 
   renderGeneral() {
     $('main').innerHTML = `
       <div class="toolbar">
-        <span class="filter-label"><i class="ti ti-filter" aria-hidden="true"></i> Filtrar:</span>
+        <span class="filter-label"><i class="ti ti-filter"></i> Filtrar:</span>
         <select class="fsel" id="f-pm" onchange="App.filterGeneral()"><option value="">Todos los PMs</option></select>
         <select class="fsel" id="f-tipo" onchange="App.filterGeneral()">
           <option value="">Todos los tipos</option><option>Proyecto</option><option>Backlog</option>
@@ -221,46 +257,47 @@ const App = {
           <option>Cierre</option><option>Cancelado</option><option>En aprobación</option>
         </select>
         <button class="btn-primary" onclick="App.exportMSR()" style="margin-left:auto">
-          <i class="ti ti-file-download" aria-hidden="true"></i> Exportar MSR_R
+          <i class="ti ti-file-download"></i> Exportar MSR_R
         </button>
       </div>
       <div class="kpi-grid" id="kpis"></div>
       <div class="status-grid" id="status-grid"></div>
       <div class="charts-row">
         <div class="chart-card">
-          <div class="chart-header"><i class="ti ti-chart-bar" aria-hidden="true"></i><span class="chart-title">Monto Aprobado TI por PM</span></div>
+          <div class="chart-header"><i class="ti ti-chart-bar"></i><span class="chart-title">Monto Aprobado TI por PM</span></div>
           <div class="chart-wrap"><canvas id="ch-pm"></canvas></div>
         </div>
         <div class="chart-card">
-          <div class="chart-header"><i class="ti ti-chart-donut" aria-hidden="true"></i><span class="chart-title">Por Estado</span></div>
+          <div class="chart-header"><i class="ti ti-chart-donut"></i><span class="chart-title">Por Estado</span></div>
           <div class="chart-wrap"><canvas id="ch-estado"></canvas></div>
         </div>
         <div class="chart-card">
-          <div class="chart-header"><i class="ti ti-chart-pie" aria-hidden="true"></i><span class="chart-title">RyR vs Estratégico</span></div>
+          <div class="chart-header"><i class="ti ti-chart-pie"></i><span class="chart-title">RyR vs Estratégico</span></div>
           <div class="chart-wrap"><canvas id="ch-tipo"></canvas></div>
         </div>
       </div>
       <div class="charts-row-2">
         <div class="chart-card">
-          <div class="chart-header"><i class="ti ti-chart-bar" aria-hidden="true"></i><span class="chart-title">Fase de los Proyectos</span></div>
+          <div class="chart-header"><i class="ti ti-chart-bar"></i><span class="chart-title">Fase de los Proyectos</span></div>
           <div class="chart-wrap-lg"><canvas id="ch-fase"></canvas></div>
         </div>
         <div class="chart-card">
-          <div class="chart-header"><i class="ti ti-trending-up" aria-hidden="true"></i><span class="chart-title">Avance Real vs Planeado por PM</span></div>
+          <div class="chart-header"><i class="ti ti-trending-up"></i><span class="chart-title">Avance Real vs Planeado por PM</span></div>
           <div class="chart-wrap-lg"><canvas id="ch-avance"></canvas></div>
         </div>
       </div>
       <div class="table-card">
         <div class="table-header">
-          <div class="table-header-left"><i class="ti ti-table" aria-hidden="true"></i><span class="table-title">Detalle de Proyectos</span></div>
-          <div style="display:flex;align-items:center;gap:8px">
+          <div class="table-header-left"><i class="ti ti-table"></i><span class="table-title">Detalle de Proyectos</span></div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <div class="search-box">
-              <i class="ti ti-search" aria-hidden="true"></i>
+              <i class="ti ti-search"></i>
               <input type="text" id="search-input" placeholder="Buscar proyecto..." oninput="App.onSearch(this.value)">
             </div>
             <span class="table-count" id="tbl-count"></span>
           </div>
         </div>
+        <div class="tbl-filter-bar" id="tbl-filter-bar"></div>
         <div class="table-scroll"><div id="tbl"></div></div>
       </div>`;
     const pms = [...new Set(ALL.map(d => d.pm))];
@@ -287,12 +324,59 @@ const App = {
     App.renderKPIs(FILTERED);
     App.renderStatusGrid(FILTERED);
     App.renderCharts(FILTERED);
-    App.renderTable(FILTERED);
+    App.renderTblFilters(FILTERED);
+    App.renderTable(App.applyTblFilters(FILTERED));
   },
 
   onSearch(val) {
     SEARCH = val.toLowerCase();
-    App.renderTable(FILTERED);
+    App.renderTable(App.applyTblFilters(FILTERED));
+  },
+
+  renderTblFilters(data) {
+  const unidades = [...new Set(data.map(d=>d._unidad).filter(Boolean))].sort();
+  const estados  = [...new Set(data.map(d=>d._estado).filter(Boolean))].sort();
+  const fases    = [...new Set(data.map(d=>d._fase).filter(Boolean))].sort();
+  const tipos    = [...new Set(data.map(d=>d._tipo_proy).filter(Boolean))].sort();
+  const pms      = [...new Set(data.map(d=>d.pm).filter(Boolean))];
+  const sel = (id, opts, label) => `
+    <select class="tbl-fsel" id="tf-${id}" onchange="App.onTblFilter('${id}',this.value)">
+      <option value="">${label}</option>
+      ${opts.map(o=>`<option value="${o}" ${TBL_FILTERS[id]===o?'selected':''}>${o}</option>`).join('')}
+    </select>`;
+  const pmSel = pms.length > 1 ? sel('pm', pms, 'PM') : '';
+  $('tbl-filter-bar').innerHTML = `
+    <div class="tbl-filter-inner">
+      <i class="ti ti-adjustments-horizontal" style="font-size:13px;color:var(--t3)"></i>
+      ${pmSel}
+      ${sel('tipo', tipos, 'Tipo')}
+      ${sel('fase', fases, 'Fase')}
+      ${sel('unidad', unidades, 'Unidad')}
+      ${sel('estado', estados, 'Estado')}
+      <button class="tbl-clear-btn" onclick="App.clearTblFilters()"><i class="ti ti-x"></i> Limpiar</button>
+    </div>`;
+},
+
+  onTblFilter(key, val) {
+    TBL_FILTERS[key] = val;
+    App.renderTable(App.applyTblFilters(FILTERED));
+  },
+
+  clearTblFilters() {
+    TBL_FILTERS = {pm:'', tipo:'', fase:'', unidad:'', estado:''};
+    App.renderTblFilters(FILTERED);
+    App.renderTable(App.applyTblFilters(FILTERED));
+  },
+
+  applyTblFilters(data) {
+    return data.filter(d => {
+      if (TBL_FILTERS.pm     && d.pm !== TBL_FILTERS.pm) return false;
+      if (TBL_FILTERS.tipo   && d._tipo_proy !== TBL_FILTERS.tipo) return false;
+      if (TBL_FILTERS.fase   && d._fase !== TBL_FILTERS.fase) return false;
+      if (TBL_FILTERS.unidad && d._unidad !== TBL_FILTERS.unidad) return false;
+      if (TBL_FILTERS.estado && d._estado !== TBL_FILTERS.estado) return false;
+      return true;
+    });
   },
 
   renderKPIs(data) {
@@ -303,24 +387,32 @@ const App = {
     const activos = data.filter(d=>d.tipo.toLowerCase().startsWith('proyecto'));
     const avg     = activos.length ? activos.reduce((s,d)=>s+d._pct,0)/activos.length : 0;
     const pctE    = monto > 0 ? Math.round(erogado/monto*100) : 0;
+    const mactiHtml = MACTI_PCT !== null
+      ? `<div class="kpi"><i class="ti ti-clipboard-check kpi-icon"></i><div class="kpi-label">MACTI</div><div class="kpi-val" style="color:${MACTI_PCT>=80?'#1A9E6A':MACTI_PCT>=50?'#C8A200':'#D94040'}">${MACTI_PCT}%</div><div class="kpi-sub">Cumplimiento</div></div>`
+      : '';
     $('kpis').innerHTML = `
       <div class="kpi"><i class="ti ti-briefcase kpi-icon"></i><div class="kpi-label">Total Proyectos</div><div class="kpi-val">${data.length}</div><div class="kpi-sub">${activos.length} activos</div></div>
       <div class="kpi"><i class="ti ti-coin kpi-icon"></i><div class="kpi-label">Monto Aprobado TI</div><div class="kpi-val">${fmt(monto)}</div><div class="kpi-sub">MXN</div></div>
       <div class="kpi"><i class="ti ti-receipt kpi-icon"></i><div class="kpi-label">Erogado</div><div class="kpi-val">${fmt(erogado)}</div><div class="kpi-sub">${pctE}% del monto</div><div class="kpi-bar"><div class="kpi-bar-fill" style="width:${Math.min(pctE,100)}%"></div></div></div>
       <div class="kpi"><i class="ti ti-credit-card kpi-icon"></i><div class="kpi-label">Comprometido</div><div class="kpi-val">${fmt(comp)}</div><div class="kpi-sub">MXN</div></div>
-      <div class="kpi"><i class="ti ti-trending-up kpi-icon"></i><div class="kpi-label">Avance Promedio</div><div class="kpi-val">${pct(avg)}</div><div class="kpi-sub">proyectos activos</div><div class="kpi-bar"><div class="kpi-bar-fill" style="width:${Math.round(avg*100)}%"></div></div></div>`;
+      <div class="kpi"><i class="ti ti-trending-up kpi-icon"></i><div class="kpi-label">Avance Promedio</div><div class="kpi-val">${pct(avg)}</div><div class="kpi-sub">proyectos activos</div><div class="kpi-bar"><div class="kpi-bar-fill" style="width:${Math.round(avg*100)}%"></div></div></div>
+      ${mactiHtml}`;
   },
 
   renderStatusGrid(data) {
-    const activos   = data.filter(d=>['Activo','Ejecución'].some(s=>d._estado.includes(s))).length;
-    const cerrados  = data.filter(d=>['Cierre','Cancelado'].some(s=>d._estado.includes(s))).length;
-    const detenidos = data.filter(d=>d._estado.includes('En aprobación')).length;
-    const sinInic   = data.filter(d=>d._fase.includes('01') || d._estado.includes('Inicio')).length;
+    const activos    = data.filter(d=>['Activo','Ejecución'].some(s=>d._estado.includes(s))).length;
+    const cerrados   = data.filter(d=>['Cierre','Cancelado'].some(s=>d._estado.includes(s))).length;
+    const detenidos  = data.filter(d=>d._estado.includes('En aprobación')).length;
+    const sinInic    = data.filter(d=>d._fase.includes('01') || d._estado.includes('Inicio')).length;
+    const conRRPP    = data.filter(d=>d._tiene_rrpp).length;
+    const iniciativas= data.filter(d=>d._es_iniciativa).length;
     $('status-grid').innerHTML = `
       <div class="status-card"><div class="status-dot" style="background:#1A9E6A"></div><div class="status-info"><div class="status-label">Proyectos Activos</div><div class="status-val">${activos}</div></div></div>
       <div class="status-card"><div class="status-dot" style="background:#803F85"></div><div class="status-info"><div class="status-label">Cerrados / Cancelados</div><div class="status-val">${cerrados}</div></div></div>
       <div class="status-card"><div class="status-dot" style="background:#C8A200"></div><div class="status-info"><div class="status-label">En Aprobación</div><div class="status-val">${detenidos}</div></div></div>
-      <div class="status-card"><div class="status-dot" style="background:#A889AB"></div><div class="status-info"><div class="status-label">Por Iniciar</div><div class="status-val">${sinInic}</div></div></div>`;
+      <div class="status-card"><div class="status-dot" style="background:#A889AB"></div><div class="status-info"><div class="status-label">Por Iniciar</div><div class="status-val">${sinInic}</div></div></div>
+      <div class="status-card"><div class="status-dot" style="background:#2563EB"></div><div class="status-info"><div class="status-label">Con RRPP</div><div class="status-val">${conRRPP}</div></div></div>
+      <div class="status-card"><div class="status-dot" style="background:#9E5EA3"></div><div class="status-info"><div class="status-label">Iniciativas</div><div class="status-val">${iniciativas}</div></div></div>`;
   },
 
   destroyCharts() {
@@ -396,6 +488,8 @@ const App = {
     const avgPlan    = activos.length ? activos.reduce((s,d)=>s+d._pct_plan,0)/activos.length : 0;
     const desv       = avg - avgPlan;
     const unidades   = [...new Set(data.map(d=>d._unidad).filter(Boolean))];
+    const conRRPP    = data.filter(d=>d._tiene_rrpp).length;
+    const iniciativas= data.filter(d=>d._es_iniciativa).length;
     $('main').innerHTML = `
       <div class="pm-header" style="border-left:4px solid ${color}">
         <div class="pm-avatar" style="background:${color}">${ini}</div>
@@ -405,6 +499,8 @@ const App = {
             <span><i class="ti ti-briefcase"></i> ${data.length} proyectos</span>
             <span><i class="ti ti-building-hospital"></i> ${unidades.length} unidades</span>
             <span><i class="ti ti-trending-up"></i> ${pct(avg)} avance</span>
+            ${conRRPP ? `<span style="color:${color}"><i class="ti ti-file-invoice"></i> ${conRRPP} con RRPP</span>` : ''}
+            ${iniciativas ? `<span style="color:var(--t2)"><i class="ti ti-bulb"></i> ${iniciativas} iniciativas</span>` : ''}
             <span class="${desvClass(desv)}"><i class="ti ti-arrows-diff"></i> Desviación: ${desvStr(desv)}</span>
           </div>
         </div>
@@ -434,7 +530,7 @@ const App = {
       <div class="table-card">
         <div class="table-header">
           <div class="table-header-left"><i class="ti ti-table"></i><span class="table-title">Proyectos de ${pm}</span></div>
-          <div style="display:flex;align-items:center;gap:8px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <div class="search-box">
               <i class="ti ti-search"></i>
               <input type="text" id="search-input" placeholder="Buscar proyecto..." oninput="App.onSearch(this.value)">
@@ -442,11 +538,13 @@ const App = {
             <span class="table-count" id="tbl-count"></span>
           </div>
         </div>
+        <div class="tbl-filter-bar" id="tbl-filter-bar"></div>
         <div class="table-scroll"><div id="tbl"></div></div>
       </div>`;
     FILTERED = data;
     App.renderChartsPM(data, color);
-    App.renderTable(data);
+    App.renderTblFilters(data);
+    App.renderTable(App.applyTblFilters(data));
   },
 
   renderChartsPM(data, color) {
@@ -480,51 +578,75 @@ const App = {
   sortTable(col) {
     if (SORT_COL === col) SORT_DIR *= -1;
     else { SORT_COL = col; SORT_DIR = col === '_nombre' ? 1 : -1; }
-    App.renderTable(FILTERED);
+    App.renderTable(App.applyTblFilters(FILTERED));
   },
 
   renderTable(data) {
-    const search = SEARCH.toLowerCase();
-    const visible = search
-      ? data.filter(d => d._nombre.toLowerCase().includes(search) || d._unidad.toLowerCase().includes(search) || d.pm.toLowerCase().includes(search))
-      : data;
-    $('tbl-count').textContent = visible.length + ' registros';
-    if (!visible.length) {
-      $('tbl').innerHTML = '<div class="empty-state"><i class="ti ti-search empty-icon"></i><div class="empty-title">Sin resultados</div></div>';
-      return;
+  const search = SEARCH.toLowerCase();
+  const visible = search
+    ? data.filter(d => d._nombre.toLowerCase().includes(search) || (d._unidad||'').toLowerCase().includes(search) || d.pm.toLowerCase().includes(search))
+    : data;
+  $('tbl-count').textContent = visible.length + ' registros';
+  if (!visible.length) {
+    $('tbl').innerHTML = '<div class="empty-state"><i class="ti ti-search empty-icon"></i><div class="empty-title">Sin resultados</div></div>';
+    return;
+  }
+  const sorted = [...visible].sort((a,b) => {
+    const va = a[SORT_COL] || '';
+    const vb = b[SORT_COL] || '';
+    if (typeof va === 'number') return (va - vb) * SORT_DIR;
+    return String(va).localeCompare(String(vb)) * SORT_DIR;
+  });
+  const cols = [
+    {label:'Nombre del Proyecto', key:'_nombre'},
+    {label:'PM', key:'pm'},
+    {label:'Unidad', key:'_unidad'},
+    {label:'Fase', key:'_fase'},
+    {label:'Estado', key:'_estado'},
+    {label:'Tipo', key:'_tipo_proy'},
+    {label:'RRPP', key:'_rrpp'},
+    {label:'Fecha Inicio', key:'_fecha_ini'},
+    {label:'Fecha Cierre', key:'_fecha_cie'},
+    {label:'Fecha Go Live', key:'_fecha_golive'},
+    {label:'Monto Aprobado TI', key:'_monto'},
+    {label:'Erogado', key:'_erogado'},
+    {label:'Disponible', key:'_disponible'},
+    {label:'% Real', key:'_pct'},
+    {label:'% Plan', key:'_pct_plan'},
+    {label:'Desviación', key:'_desviacion'},
+    {label:'% MACTI', key:'_macti'},
+  ];
+  const arrow = key => {
+    if (SORT_COL !== key) return '<i class="ti ti-arrows-sort" style="opacity:.3;font-size:11px"></i>';
+    return SORT_DIR === 1
+      ? '<i class="ti ti-sort-ascending" style="font-size:11px;color:var(--p)"></i>'
+      : '<i class="ti ti-sort-descending" style="font-size:11px;color:var(--p)"></i>';
+  };
+  const fmtFecha = v => {
+    if (!v || v === '' || v === 'nan' || v === '-') return '—';
+    const s = String(v);
+    if (s.toUpperCase().includes('INICIATIVA') || s.toUpperCase().includes('TBD')) {
+      return `<span style="font-size:10px;background:#F3EAF4;color:#803F85;padding:2px 6px;border-radius:4px">Iniciativa</span>`;
     }
-    const sorted = [...visible].sort((a,b) => {
-      const va = a[SORT_COL] || '';
-      const vb = b[SORT_COL] || '';
-      if (typeof va === 'number') return (va - vb) * SORT_DIR;
-      return String(va).localeCompare(String(vb)) * SORT_DIR;
-    });
-    const cols = [
-      {label:'Nombre del Proyecto', key:'_nombre'},
-      {label:'PM', key:'pm'},
-      {label:'Unidad', key:'_unidad'},
-      {label:'Fase', key:'_fase'},
-      {label:'Estado', key:'_estado'},
-      {label:'Tipo', key:'_tipo_proy'},
-      {label:'Monto Aprobado TI', key:'_monto'},
-      {label:'Erogado', key:'_erogado'},
-      {label:'Disponible', key:'_disponible'},
-      {label:'% Real', key:'_pct'},
-      {label:'% Plan', key:'_pct_plan'},
-      {label:'Desviación', key:'_desviacion'},
-    ];
-    const arrow = key => {
-      if (SORT_COL !== key) return '<i class="ti ti-arrows-sort" style="opacity:.3;font-size:11px"></i>';
-      return SORT_DIR === 1
-        ? '<i class="ti ti-sort-ascending" style="font-size:11px;color:var(--p)"></i>'
-        : '<i class="ti ti-sort-descending" style="font-size:11px;color:var(--p)"></i>';
-    };
-    $('tbl').innerHTML = `
-      <table>
-        <thead><tr>
-          ${cols.map(c=>`<th onclick="App.sortTable('${c.key}')" style="cursor:pointer;user-select:none">${c.label} ${arrow(c.key)}</th>`).join('')}
-        </tr></thead>
-        <tbody>${sorted.map(d=>`
+    if (!isNaN(v) && Number(v) > 1000) {
+      const d = new Date(Math.round((Number(v) - 25569) * 86400 * 1000) + new Date().getTimezoneOffset() * 60 * 1000);
+      return d.toLocaleDateString('es-MX', {day:'2-digit', month:'short', year:'numeric'});
+    }
+    try {
+      const d = new Date(v);
+      if (!isNaN(d.getTime()) && d.getFullYear() > 1970) {
+        return d.toLocaleDateString('es-MX', {day:'2-digit', month:'short', year:'numeric'});
+      }
+    } catch(e) {}
+    return s;
+  };
+  $('tbl').innerHTML = `
+    <table>
+      <thead><tr>
+        ${cols.map(c=>`<th onclick="App.sortTable('${c.key}')" style="cursor:pointer;user-select:none">${c.label} ${arrow(c.key)}</th>`).join('')}
+      </tr></thead>
+      <tbody>
+        ${sorted.map(d=>`
           <tr>
             <td title="${d._nombre}">${d._nombre||'—'}</td>
             <td><span class="chip" style="background:${pmColor(d.pm)}18;color:${pmColor(d.pm)};border:1px solid ${pmColor(d.pm)}33">${d.pm}</span></td>
@@ -532,16 +654,24 @@ const App = {
             <td>${d._fase||'—'}</td>
             <td><span class="badge ${badgeClass(d._estado)}">${d._estado||'—'}</span></td>
             <td>${d._tipo_proy||'—'}</td>
+            <td><span style="font-family:'DM Mono',monospace;font-size:11px">${d._rrpp||'—'}</span></td>
+            <td style="font-size:11px">${fmtFecha(d._fecha_ini)}</td>
+            <td style="font-size:11px">${fmtFecha(d._fecha_cie)}</td>
+            <td style="font-size:11px">${fmtFecha(d._fecha_golive)}</td>
             <td>${fmt(d._monto)}</td>
             <td>${fmt(d._erogado)}</td>
             <td>${fmt(d._disponible)}</td>
             <td><div class="prog"><div class="prog-bar"><div class="prog-fill" style="width:${Math.round((d._pct||0)*100)}%;background:${pmColor(d.pm)}"></div></div><span class="prog-val">${pct(d._pct)}</span></div></td>
             <td><span class="prog-val">${pct(d._pct_plan)}</span></td>
             <td><span class="${desvClass(d._desviacion)}">${desvStr(d._desviacion)}</span></td>
+            <td>${d._macti !== null && d._macti !== undefined
+              ? `<span style="font-size:11px;font-weight:600;color:${d._macti>=80?'#1A9E6A':d._macti>=50?'#C8A200':'#D94040'}">${d._macti.toFixed(2)}%</span>`
+              : '<span style="color:var(--t3);font-size:11px">—</span>'
+            }</td>
           </tr>`).join('')}
-        </tbody>
-      </table>`;
-  },
+      </tbody>
+    </table>`;
+},
 
   exportMSR() {
     if (!FILTERED.length) return;
