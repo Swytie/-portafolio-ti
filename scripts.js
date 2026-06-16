@@ -1,18 +1,38 @@
 const PM_SHEETS = ['Alexia C','Alexis L','Zaira F','Cynthia M','Alejandra R'];
-const PM_COLORS = ['#803F85','#2563EB','#1A9E6A','#C8A200','#D94040'];
+const PM_COLORS = ['#B07CC6','#2563EB','#1A9E6A','#C8A200','#D94040'];
 const STATUS_COLORS = {
   'Ejecución':'#2563EB','Activo':'#1A9E6A','Planeación':'#C8A200',
-  'Cierre':'#1A9E6A','Cancelado':'#D94040','En aprobación':'#803F85',
+  'Cierre':'#1A9E6A','En proceso de cierre':'#C8A200','Cerrado':'#1A9E6A',
+  'Cancelado':'#D94040','En aprobación':'#803F85',
   'Inicio':'#A889AB','N/A':'#A889AB','-':'#A889AB','':'#A889AB'
 };
 
-const SHAREPOINT_URL = 'https://christusmx-my.sharepoint.com/:x:/g/personal/jorgez_guerrero_christus_mx/IQB2sHTOZELzSZnL9YDxAk-LAXYSs26VmOC0IKQxCU1lIAI?e=8i20Ff&download=1';
-const AUTO_REFRESH_MS = 5 * 60 * 1000;
+// Orden oficial de fases y estados (ver guía de catálogo del portafolio)
+const FASE_ORDER = ['Inicio','Planeación','Ejecución','Cierre'];
+const ESTADO_ORDER = ['Parametrización','En aprobación','Iniciativa (RPP)','Inicio','Planeación','Ejecución','Cierre','En proceso de cierre','Cerrado','Cancelado','Activo'];
+const sortByOrder = (arr, orderList) => {
+  const norm = s => String(s||'').replace(/^(\d+|N\/A)\s*/i,'').trim();
+  return [...arr].sort((a,b) => {
+    const ia = orderList.indexOf(norm(a));
+    const ib = orderList.indexOf(norm(b));
+    const ra = ia === -1 ? 999 : ia;
+    const rb = ib === -1 ? 999 : ib;
+    if (ra !== rb) return ra - rb;
+    return String(a).localeCompare(String(b));
+  });
+};
+
+const SHAREPOINT_URL = 'https://portafolio-proxy.jorgeguerrerp90.workers.dev/';
+const AUTO_REFRESH_MS = 60 * 1000;
 
 let ALL = [], FILTERED = [], CHARTS = {};
-let SORT_COL = '_monto', SORT_DIR = -1, SEARCH = '';
+let APP_INITIALIZED = false, CURRENT_TAB = 'general';
+let LAST_VIEW_HASH = null;
+const hashData = arr => JSON.stringify(arr);
+const DEFAULT_SORT_COL = '_idx', DEFAULT_SORT_DIR = 1;
+let SORT_COL = DEFAULT_SORT_COL, SORT_DIR = DEFAULT_SORT_DIR, SEARCH = '';
 let TBL_FILTERS = {pm:'', tipo:'', fase:'', unidad:'', estado:''};
-let refreshTimer = null;
+let refreshTimer = null, countdownTimer = null, nextRefreshAt = null;
 let MACTI_PCT = null;
 
 const $ = id => document.getElementById(id);
@@ -44,6 +64,22 @@ const desvStr = v => {
   if (!v && v !== 0) return '—';
   const p = Math.round(v * 100);
   return (p > 0 ? '+' : '') + p + '%';
+};
+const excelDateToJS = v => new Date(Math.round((Number(v) - 25569) * 86400 * 1000) + new Date().getTimezoneOffset() * 60 * 1000);
+const isGoLiveOverdue = d => {
+  const v = d._fecha_golive;
+  if (!v || v === '' || v === 'nan' || v === '-') return false;
+  const s = String(v);
+  if (s.toUpperCase().includes('INICIATIVA') || s.toUpperCase().includes('TBD')) return false;
+  let date;
+  if (!isNaN(v) && Number(v) > 1000) date = excelDateToJS(v);
+  else { date = new Date(v); if (isNaN(date.getTime())) return false; }
+  const today = new Date(); today.setHours(0,0,0,0);
+  if (date >= today) return false;
+  const fase = (d._fase || '').toLowerCase();
+  const estado = (d._estado || '').toLowerCase();
+  if (estado.includes('cancel')) return false;
+  return !fase.includes('cierr') && !fase.includes('cerr');
 };
 
 const App = {
@@ -80,9 +116,8 @@ const App = {
     if (ok) {
       btn.innerHTML = '<i class="ti ti-refresh"></i> Actualizar';
       btn.disabled = false;
-      btn.onclick = () => App.fetchSharePoint();
-      if (refreshTimer) clearInterval(refreshTimer);
-      refreshTimer = setInterval(App.fetchSharePoint, AUTO_REFRESH_MS);
+      btn.onclick = () => { App.fetchSharePoint(); App.scheduleRefresh(); };
+      App.scheduleRefresh();
     } else {
       btn.innerHTML = '<i class="ti ti-upload"></i> Cargar manual';
       btn.disabled = false;
@@ -90,9 +125,33 @@ const App = {
     }
   },
 
+  scheduleRefresh() {
+    if (refreshTimer) clearInterval(refreshTimer);
+    nextRefreshAt = Date.now() + AUTO_REFRESH_MS;
+    refreshTimer = setInterval(() => {
+      nextRefreshAt = Date.now() + AUTO_REFRESH_MS;
+      App.fetchSharePoint();
+    }, AUTO_REFRESH_MS);
+    App.startCountdown();
+  },
+
+  startCountdown() {
+    if (countdownTimer) clearInterval(countdownTimer);
+    const tick = () => {
+      const el = $('next-update');
+      if (!el || !nextRefreshAt) return;
+      const diff = Math.max(0, nextRefreshAt - Date.now());
+      const m = Math.floor(diff / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      el.textContent = `Próxima sync en ${m}:${String(s).padStart(2,'0')}`;
+    };
+    tick();
+    countdownTimer = setInterval(tick, 1000);
+  },
+
   async fetchSharePoint() {
     try {
-      const res = await fetch(SHAREPOINT_URL, {credentials:'include', cache:'no-store'});
+      const res = await fetch(`${SHAREPOINT_URL}?t=${Date.now()}`, {cache:'no-store'});
       if (!res.ok) throw new Error(res.status);
       const buffer = await res.arrayBuffer();
       App.parseExcel(buffer);
@@ -102,7 +161,7 @@ const App = {
       return true;
     } catch(e) {
       console.error('SharePoint error:', e);
-      alert('No se pudo conectar a SharePoint. Asegúrate de estar logueado en christusmx-my.sharepoint.com en esta misma ventana del navegador, luego intenta de nuevo.');
+      alert('No se pudo conectar a SharePoint/OneDrive. Verifica que el vínculo siga siendo válido y que el archivo esté compartido como "Cualquier persona con el vínculo".');
       return false;
     }
   },
@@ -203,12 +262,38 @@ const App = {
       obj._macti = (window._mactiMap && mactiKey && window._mactiMap[mactiKey] !== undefined)
         ? window._mactiMap[mactiKey]
         : null;
-      if (obj._nombre && obj._nombre !== 'nan') ALL.push(obj);
+      if (obj._nombre && obj._nombre !== 'nan') { obj._idx = ALL.length; ALL.push(obj); }
     }
   });
   App.buildTabs();
-  App.showTab('general');
+  if (!APP_INITIALIZED) {
+    APP_INITIALIZED = true;
+    App.showTab('general');
+  } else {
+    App.refreshCurrentView();
+  }
 },
+
+  refreshCurrentView() {
+    const relevant = CURRENT_TAB === 'general' ? ALL : ALL.filter(d=>d.pm===CURRENT_TAB);
+    const hash = hashData(relevant);
+    if (hash === LAST_VIEW_HASH) return;
+    LAST_VIEW_HASH = hash;
+    if (CURRENT_TAB === 'general') {
+      if (!$('f-pm')) { App.showTab('general'); return; }
+      const pmSel = $('f-pm').value, unidadSel = $('f-unidad').value;
+      const pms = [...new Set(ALL.map(d=>d.pm))];
+      const unidades = [...new Set(ALL.map(d=>d._unidad).filter(Boolean))].sort();
+      $('f-pm').innerHTML = '<option value="">Todos los PMs</option>' + pms.map(p=>`<option ${p===pmSel?'selected':''}>${p}</option>`).join('');
+      $('f-unidad').innerHTML = '<option value="">Todas las unidades</option>' + unidades.map(u=>`<option ${u===unidadSel?'selected':''}>${u}</option>`).join('');
+      App.filterGeneral();
+    } else if (ALL.some(d=>d.pm===CURRENT_TAB)) {
+      App.destroyCharts();
+      App.renderPM(CURRENT_TAB);
+    } else {
+      App.showTab('general');
+    }
+  },
 
   buildTabs() {
     const pms = [...new Set(ALL.map(d => d.pm))];
@@ -230,12 +315,15 @@ const App = {
   },
 
   showTab(tab) {
+    CURRENT_TAB = tab;
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     const tid = tab === 'general' ? 'tab-general' : 'tab-'+tab.replace(/ /g,'_');
     if ($(tid)) $(tid).classList.add('active');
-    SEARCH = ''; SORT_COL = '_monto'; SORT_DIR = -1;
+    SEARCH = ''; SORT_COL = DEFAULT_SORT_COL; SORT_DIR = DEFAULT_SORT_DIR;
     TBL_FILTERS = {pm:'', tipo:'', fase:'', unidad:'', estado:''};
+    App.destroyCharts();
     tab === 'general' ? App.renderGeneral() : App.renderPM(tab);
+    LAST_VIEW_HASH = hashData(tab === 'general' ? ALL : ALL.filter(d=>d.pm===tab));
   },
 
   renderGeneral() {
@@ -292,13 +380,14 @@ const App = {
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <div class="search-box">
               <i class="ti ti-search"></i>
-              <input type="text" id="search-input" placeholder="Buscar proyecto..." oninput="App.onSearch(this.value)">
+              <input type="text" id="search-input" placeholder="Buscar proyecto..." value="${SEARCH}" oninput="App.onSearch(this.value)">
             </div>
             <span class="table-count" id="tbl-count"></span>
           </div>
         </div>
         <div class="tbl-filter-bar" id="tbl-filter-bar"></div>
-        <div class="table-scroll"><div id="tbl"></div></div>
+        <div class="table-scroll-top" id="tbl-scroll-top"><div class="table-scroll-top-inner" id="tbl-scroll-top-inner"></div></div>
+        <div class="table-scroll" id="tbl-scroll"><div id="tbl"></div></div>
       </div>`;
     const pms = [...new Set(ALL.map(d => d.pm))];
     const unidades = [...new Set(ALL.map(d => d._unidad).filter(Boolean))].sort();
@@ -335,8 +424,8 @@ const App = {
 
   renderTblFilters(data) {
   const unidades = [...new Set(data.map(d=>d._unidad).filter(Boolean))].sort();
-  const estados  = [...new Set(data.map(d=>d._estado).filter(Boolean))].sort();
-  const fases    = [...new Set(data.map(d=>d._fase).filter(Boolean))].sort();
+  const estados  = sortByOrder([...new Set(data.map(d=>d._estado).filter(Boolean))], ESTADO_ORDER);
+  const fases    = sortByOrder([...new Set(data.map(d=>d._fase).filter(Boolean))], FASE_ORDER);
   const tipos    = [...new Set(data.map(d=>d._tipo_proy).filter(Boolean))].sort();
   const pms      = [...new Set(data.map(d=>d.pm).filter(Boolean))];
   const sel = (id, opts, label) => `
@@ -345,6 +434,22 @@ const App = {
       ${opts.map(o=>`<option value="${o}" ${TBL_FILTERS[id]===o?'selected':''}>${o}</option>`).join('')}
     </select>`;
   const pmSel = pms.length > 1 ? sel('pm', pms, 'PM') : '';
+  const sortOptions = [
+    {v:'_idx|1',     label:'Orden original (Excel)'},
+    {v:'_nombre|1',  label:'Proyecto (A-Z)'},
+    {v:'_nombre|-1', label:'Proyecto (Z-A)'},
+    {v:'_estado|1',  label:'Estado (orden oficial)'},
+    {v:'_fase|1',    label:'Fase (orden oficial)'},
+    {v:'_fecha_golive|1', label:'Go Live (próxima primero)'},
+    {v:'_monto|-1',  label:'Monto (mayor a menor)'},
+    {v:'_pct|-1',    label:'% Avance (mayor a menor)'},
+  ];
+  const sortVal = `${SORT_COL}|${SORT_DIR}`;
+  const sortSel = `
+    <span class="tbl-fsel-label">Ordenar por:</span>
+    <select class="tbl-fsel" id="tf-sort" onchange="App.onSortSelect(this.value)">
+      ${sortOptions.map(o=>`<option value="${o.v}" ${sortVal===o.v?'selected':''}>${o.label}</option>`).join('')}
+    </select>`;
   $('tbl-filter-bar').innerHTML = `
     <div class="tbl-filter-inner">
       <i class="ti ti-adjustments-horizontal" style="font-size:13px;color:var(--t3)"></i>
@@ -353,9 +458,18 @@ const App = {
       ${sel('fase', fases, 'Fase')}
       ${sel('unidad', unidades, 'Unidad')}
       ${sel('estado', estados, 'Estado')}
+      ${sortSel}
       <button class="tbl-clear-btn" onclick="App.clearTblFilters()"><i class="ti ti-x"></i> Limpiar</button>
     </div>`;
 },
+
+  onSortSelect(val) {
+    if (!val) return;
+    const [col, dir] = val.split('|');
+    SORT_COL = col;
+    SORT_DIR = Number(dir);
+    App.renderTable(App.applyTblFilters(FILTERED));
+  },
 
   onTblFilter(key, val) {
     TBL_FILTERS[key] = val;
@@ -364,6 +478,7 @@ const App = {
 
   clearTblFilters() {
     TBL_FILTERS = {pm:'', tipo:'', fase:'', unidad:'', estado:''};
+    SORT_COL = DEFAULT_SORT_COL; SORT_DIR = DEFAULT_SORT_DIR;
     App.renderTblFilters(FILTERED);
     App.renderTable(App.applyTblFilters(FILTERED));
   },
@@ -419,11 +534,25 @@ const App = {
     ['pm','estado','tipo','fase','avance'].forEach(k => { if (CHARTS[k]) { CHARTS[k].destroy(); delete CHARTS[k]; } });
   },
 
+  upsertChart(key, canvasId, config) {
+    const existing = CHARTS[key];
+    if (existing) {
+      existing.data.labels = config.data.labels;
+      config.data.datasets.forEach((ds, i) => {
+        if (existing.data.datasets[i]) Object.assign(existing.data.datasets[i], ds);
+        else existing.data.datasets[i] = ds;
+      });
+      existing.data.datasets.length = config.data.datasets.length;
+      existing.update();
+    } else {
+      CHARTS[key] = new Chart($(canvasId), config);
+    }
+  },
+
   renderCharts(data) {
-    App.destroyCharts();
     const pms = [...new Set(ALL.map(d=>d.pm))];
     const montos = pms.map(p=>data.filter(d=>d.pm===p).reduce((s,d)=>s+d._monto,0));
-    CHARTS.pm = new Chart($('ch-pm'), {
+    App.upsertChart('pm','ch-pm', {
       type:'bar',
       data:{labels:pms, datasets:[{data:montos, backgroundColor:pms.map(p=>pmColor(p)), borderRadius:5}]},
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
@@ -432,7 +561,7 @@ const App = {
     const est = {};
     data.forEach(d=>{const e=d._estado||'Sin estado'; est[e]=(est[e]||0)+1;});
     const eK = Object.keys(est).filter(k=>est[k]>0);
-    CHARTS.estado = new Chart($('ch-estado'), {
+    App.upsertChart('estado','ch-estado', {
       type:'doughnut',
       data:{labels:eK, datasets:[{data:eK.map(k=>est[k]), backgroundColor:eK.map(k=>STATUS_COLORS[k]||'#A889AB'), borderWidth:0}]},
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'bottom',labels:{font:{size:9},boxWidth:8}}}}
@@ -440,7 +569,7 @@ const App = {
     const tip = {};
     data.forEach(d=>{const t=(d._tipo_proy||'').toLowerCase().includes('estrateg')?'Estratégico':'RyR'; tip[t]=(tip[t]||0)+1;});
     const tK = Object.keys(tip);
-    CHARTS.tipo = new Chart($('ch-tipo'), {
+    App.upsertChart('tipo','ch-tipo', {
       type:'doughnut',
       data:{labels:tK, datasets:[{data:tK.map(k=>tip[k]), backgroundColor:['#803F85','#1A9E6A'], borderWidth:0}]},
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'bottom',labels:{font:{size:9},boxWidth:8}}}}
@@ -448,7 +577,7 @@ const App = {
     const fases = {};
     data.forEach(d=>{const f=d._fase||'Sin fase'; fases[f]=(fases[f]||0)+1;});
     const fK = Object.keys(fases).sort();
-    CHARTS.fase = new Chart($('ch-fase'), {
+    App.upsertChart('fase','ch-fase', {
       type:'bar',
       data:{labels:fK, datasets:[{data:fK.map(k=>fases[k]), backgroundColor:'#803F85', borderRadius:4}]},
       options:{indexAxis:'y', responsive:true, maintainAspectRatio:false,
@@ -464,7 +593,7 @@ const App = {
       const rows = data.filter(d=>d.pm===p && d.tipo.toLowerCase().startsWith('proyecto'));
       return rows.length ? Math.round(rows.reduce((s,d)=>s+d._pct_plan,0)/rows.length*100) : 0;
     });
-    CHARTS.avance = new Chart($('ch-avance'), {
+    App.upsertChart('avance','ch-avance', {
       type:'bar',
       data:{labels:pmsAvance, datasets:[
         {label:'Real', data:realAvg, backgroundColor:pmsAvance.map(p=>pmColor(p)), borderRadius:4},
@@ -533,13 +662,14 @@ const App = {
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <div class="search-box">
               <i class="ti ti-search"></i>
-              <input type="text" id="search-input" placeholder="Buscar proyecto..." oninput="App.onSearch(this.value)">
+              <input type="text" id="search-input" placeholder="Buscar proyecto..." value="${SEARCH}" oninput="App.onSearch(this.value)">
             </div>
             <span class="table-count" id="tbl-count"></span>
           </div>
         </div>
         <div class="tbl-filter-bar" id="tbl-filter-bar"></div>
-        <div class="table-scroll"><div id="tbl"></div></div>
+        <div class="table-scroll-top" id="tbl-scroll-top"><div class="table-scroll-top-inner" id="tbl-scroll-top-inner"></div></div>
+        <div class="table-scroll" id="tbl-scroll"><div id="tbl"></div></div>
       </div>`;
     FILTERED = data;
     App.renderChartsPM(data, color);
@@ -548,10 +678,9 @@ const App = {
   },
 
   renderChartsPM(data, color) {
-    App.destroyCharts();
     const uds = [...new Set(data.map(d=>d._unidad).filter(Boolean))];
     const montos = uds.map(u=>data.filter(d=>d._unidad===u).reduce((s,d)=>s+d._monto,0));
-    CHARTS.pm = new Chart($('ch-pm'), {
+    App.upsertChart('pm','ch-pm', {
       type:'bar',
       data:{labels:uds, datasets:[{data:montos, backgroundColor:color||'#803F85', borderRadius:5}]},
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
@@ -560,7 +689,7 @@ const App = {
     const est = {};
     data.forEach(d=>{const e=d._estado||'Sin estado'; est[e]=(est[e]||0)+1;});
     const eK = Object.keys(est).filter(k=>est[k]>0);
-    CHARTS.estado = new Chart($('ch-estado'), {
+    App.upsertChart('estado','ch-estado', {
       type:'doughnut',
       data:{labels:eK, datasets:[{data:eK.map(k=>est[k]), backgroundColor:eK.map(k=>STATUS_COLORS[k]||'#A889AB'), borderWidth:0}]},
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'bottom',labels:{font:{size:9},boxWidth:8}}}}
@@ -568,7 +697,7 @@ const App = {
     const fases = {};
     data.forEach(d=>{const f=d._fase||'Sin fase'; fases[f]=(fases[f]||0)+1;});
     const fK = Object.keys(fases).filter(k=>fases[k]>0);
-    CHARTS.tipo = new Chart($('ch-tipo'), {
+    App.upsertChart('tipo','ch-tipo', {
       type:'doughnut',
       data:{labels:fK, datasets:[{data:fK.map(k=>fases[k]), backgroundColor:PM_COLORS, borderWidth:0}]},
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'bottom',labels:{font:{size:9},boxWidth:8}}}}
@@ -591,13 +720,26 @@ const App = {
     $('tbl').innerHTML = '<div class="empty-state"><i class="ti ti-search empty-icon"></i><div class="empty-title">Sin resultados</div></div>';
     return;
   }
+  const ORDER_MAP = {_estado: ESTADO_ORDER, _fase: FASE_ORDER};
+  const normOrder = s => String(s||'').replace(/^(\d+|N\/A)\s*/i,'').trim();
   const sorted = [...visible].sort((a,b) => {
+    const orderList = ORDER_MAP[SORT_COL];
+    if (orderList) {
+      const ia = orderList.indexOf(normOrder(a[SORT_COL]));
+      const ib = orderList.indexOf(normOrder(b[SORT_COL]));
+      const ra = ia === -1 ? 999 : ia;
+      const rb = ib === -1 ? 999 : ib;
+      if (ra !== rb) return (ra - rb) * SORT_DIR;
+      return String(a[SORT_COL]||'').localeCompare(String(b[SORT_COL]||'')) * SORT_DIR;
+    }
     const va = a[SORT_COL] || '';
     const vb = b[SORT_COL] || '';
     if (typeof va === 'number') return (va - vb) * SORT_DIR;
     return String(va).localeCompare(String(vb)) * SORT_DIR;
   });
   const cols = [
+    {label:'', key:'_alert', noSort:true},
+    {label:'# Proyecto', key:'_id'},
     {label:'Nombre del Proyecto', key:'_nombre'},
     {label:'PM', key:'pm'},
     {label:'Unidad', key:'_unidad'},
@@ -643,11 +785,19 @@ const App = {
   $('tbl').innerHTML = `
     <table>
       <thead><tr>
-        ${cols.map(c=>`<th onclick="App.sortTable('${c.key}')" style="cursor:pointer;user-select:none">${c.label} ${arrow(c.key)}</th>`).join('')}
+        ${cols.map(c=>c.noSort
+          ? `<th style="width:28px"></th>`
+          : `<th onclick="App.sortTable('${c.key}')" style="cursor:pointer;user-select:none">${c.label} ${arrow(c.key)}</th>`
+        ).join('')}
       </tr></thead>
       <tbody>
-        ${sorted.map(d=>`
-          <tr>
+        ${sorted.map(d=>{
+          const overdue = isGoLiveOverdue(d);
+          const overdueTitle = 'Fecha Go Live pasada y la fase aún no es Cierre';
+          return `
+          <tr ${overdue ? `style="background:#FDECEC" title="${overdueTitle}"` : ''}>
+            <td style="width:28px;text-align:center">${overdue ? `<i class="ti ti-alert-triangle-filled" style="color:#D94040;font-size:14px" title="Fecha Go Live pasada"></i>` : ''}</td>
+            <td><span style="font-family:'DM Mono',monospace;font-size:11px">${d._id||'—'}</span></td>
             <td title="${d._nombre}">${d._nombre||'—'}</td>
             <td><span class="chip" style="background:${pmColor(d.pm)}18;color:${pmColor(d.pm)};border:1px solid ${pmColor(d.pm)}33">${d.pm}</span></td>
             <td title="${d._unidad}">${d._unidad||'—'}</td>
@@ -668,44 +818,131 @@ const App = {
               ? `<span style="font-size:11px;font-weight:600;color:${d._macti>=80?'#1A9E6A':d._macti>=50?'#C8A200':'#D94040'}">${d._macti.toFixed(2)}%</span>`
               : '<span style="color:var(--t3);font-size:11px">—</span>'
             }</td>
-          </tr>`).join('')}
+          </tr>`;
+        }).join('')}
       </tbody>
     </table>`;
+
+  const scrollBottom = $('tbl-scroll');
+  const scrollTop = $('tbl-scroll-top');
+  const scrollTopInner = $('tbl-scroll-top-inner');
+  if (scrollBottom && scrollTop && scrollTopInner) {
+    const table = scrollBottom.querySelector('table');
+    scrollTopInner.style.width = table.scrollWidth + 'px';
+    scrollTop.onscroll = () => { scrollBottom.scrollLeft = scrollTop.scrollLeft; };
+    scrollBottom.onscroll = () => { scrollTop.scrollLeft = scrollBottom.scrollLeft; };
+  }
 },
 
-  exportMSR() {
+  async exportMSR() {
     if (!FILTERED.length) return;
-    const wb = XLSX.utils.book_new();
-    const PURPLE='FF7030A0', BLUE='FF2E75B6', ORANGE='FFE97132', GREEN='FF375623', DBLUE='FF1F3864';
-    const h1 = bg => ({font:{name:'Aptos Display',bold:true,sz:11,color:{rgb:'FFFFFFFF'}},fill:{fgColor:{rgb:bg},patternType:'solid'},alignment:{horizontal:'center',vertical:'center',wrapText:true},border:{top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}}});
-    const h2 = bg => ({font:{name:'Aptos Display',bold:true,sz:11,color:{rgb:'FFFFFFFF'}},fill:{fgColor:{rgb:bg},patternType:'solid'},alignment:{horizontal:'center',vertical:'center',wrapText:true},border:{top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}}});
-    const ds = {font:{name:'Aptos Display',sz:10},alignment:{horizontal:'left',vertical:'center'},border:{bottom:{style:'thin',color:{rgb:'FFD9D9D9'}},right:{style:'thin',color:{rgb:'FFD9D9D9'}}}};
-    const row1 = Array(48).fill({v:'',s:{}});
-    row1[0]={v:'Información General | Nivel Proyecto',s:h1(PURPLE)};
-    row1[10]={v:'Información General | Nivel Tarea',s:h1(PURPLE)};
-    row1[20]={v:'Información de Compra',s:h1(BLUE)};
-    row1[29]={v:'Planeación & Seguimiento',s:h1(ORANGE)};
-    row1[36]={v:'Plan de Erogaciones',s:h1(GREEN)};
-    row1[43]={v:'Presupuesto',s:h1(DBLUE)};
-    const cols=[['Gerencia TI',PURPLE],['Año de gestión',PURPLE],['ID Proyecto',PURPLE],['Nombre de proyecto',PURPLE],['Fecha Inicio',PURPLE],['Fecha Cierre',PURPLE],['Área Solicitante',PURPLE],['Unidad Médica',PURPLE],['Fase del proyecto',PURPLE],['% Avance Real',PURPLE],['RPP',PURPLE],['Estatus',PURPLE],['Responsable TI',PURPLE],['ID Tarea',PURPLE],['Nombre de tarea',PURPLE],['Categoría',PURPLE],['Concepto',PURPLE],['Descripción',PURPLE],['Departamento/Área',PURPLE],['Tipo',PURPLE],['Proveedor',BLUE],['#Solicitud/#Requisición',BLUE],['Fecha de solicitud',BLUE],['Estatus de solicitud',BLUE],['OC Asociada',BLUE],['Monto OC',BLUE],['Fecha generación de OC',BLUE],['Estatus de OC',BLUE],['Factura',BLUE],['Fecha KickOff',ORANGE],['Preconfiguracion de Equipos',ORANGE],['Entrega de equipos en Unidad',ORANGE],['Instalación Física de Equipos',ORANGE],['Configuración de Equipos',ORANGE],['Pruebas',ORANGE],['Comentario de Estatus',ORANGE],['Fecha Go Live',ORANGE],['Mes 1',GREEN],['Mes 2',GREEN],['Mes 3',GREEN],['Mes 4',GREEN],['Mes 5',GREEN],['Mes 6',GREEN],['Mes "N"',GREEN],['Monto Aprobado',DBLUE],['Total Erogado',DBLUE],['Total Comprometido',DBLUE],['Remanente',DBLUE]];
-    const row2 = cols.map(([v,bg])=>({v,s:h2(bg)}));
-    const rows = [row1,row2];
-    FILTERED.forEach(d=>{
-      const c = v=>({v:v||'',s:ds});
-      const r = Array(48).fill(c(''));
-      r[0]=c(d.pm); r[1]=c(2026); r[2]=c(d._id); r[3]=c(d._nombre);
-      r[4]=c(d._fecha_ini); r[5]=c(d._fecha_cie); r[6]=c(d._direccion); r[7]=c(d._unidad);
-      r[8]=c(d._fase); r[9]=c(d._pct?Math.round(d._pct*100)+'%':'');
-      r[10]=c(d._rrpp); r[11]=c(d._estado); r[12]=c(d._lider); r[19]=c(d._tipo_proy);
-      r[29]=c(d._fecha_golive); r[35]=c(d._comentarios);
-      r[43]=c(d._monto||0); r[44]=c(d._erogado||0); r[45]=c(d._comprometido||0); r[46]=c(d._disponible||0);
-      rows.push(r);
+    if (typeof ExcelJS === 'undefined') {
+      alert('La librería ExcelJS no cargó. Verifica que el dashboard esté abierto con conexión a internet.');
+      return;
+    }
+    try {
+
+    const P1='FF5C2B60', P2='FF803F85', DB1='FF1F3864', DB2='FF2E4E8A';
+
+    const fmtDate = v => {
+      if (!v || v==='' || v==='nan' || v==='-') return '';
+      const s = String(v);
+      if (s.toUpperCase().includes('INICIATIVA')||s.toUpperCase().includes('TBD')) return s;
+      if (!isNaN(v) && Number(v)>1000) {
+        const d = new Date(Math.round((Number(v)-25569)*86400*1000)+new Date().getTimezoneOffset()*60*1000);
+        return d.toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'});
+      }
+      try { const d=new Date(v); if(!isNaN(d.getTime())&&d.getFullYear()>1970) return d.toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'}); } catch(e){}
+      return s;
+    };
+
+    const SEC = [
+      {label:'Información del Proyecto', bg:P1,  sub:P2,  start:0,  end:10},
+      {label:'Presupuesto',              bg:DB1, sub:DB2, start:11, end:17},
+    ];
+    const COLS = [
+      {label:'# Proyecto',          sec:0, v:d=>d._id||'',        w:14},
+      {label:'Nombre del Proyecto', sec:0, v:d=>d._nombre||'',    w:42},
+      {label:'PM',                  sec:0, v:d=>d.pm||'',         w:14},
+      {label:'Unidad',              sec:0, v:d=>d._unidad||'',    w:22},
+      {label:'Tipo',                sec:0, v:d=>d._tipo_proy||'', w:16},
+      {label:'RRPP',                sec:0, v:d=>d._rrpp||'',      w:10},
+      {label:'Fase',                sec:0, v:d=>d._fase||'',      w:18},
+      {label:'Estado',              sec:0, v:d=>d._estado||'',    w:20},
+      {label:'Fecha Inicio',        sec:0, v:d=>fmtDate(d._fecha_ini),     w:16},
+      {label:'Fecha Cierre',        sec:0, v:d=>fmtDate(d._fecha_cie),     w:16},
+      {label:'Fecha Go Live',       sec:0, v:d=>fmtDate(d._fecha_golive),  w:16},
+      {label:'Monto Aprobado TI',   sec:1, v:d=>d._monto||0,        num:true, w:20},
+      {label:'Erogado',             sec:1, v:d=>d._erogado||0,      num:true, w:16},
+      {label:'Disponible',          sec:1, v:d=>d._disponible||0,   num:true, w:16},
+      {label:'% Real',              sec:1, v:d=>d._pct!=null?Math.round(d._pct*100)+'%':'',                                                        center:true, w:10},
+      {label:'% Plan',              sec:1, v:d=>d._pct_plan!=null?Math.round(d._pct_plan*100)+'%':'',                                              center:true, w:10},
+      {label:'Desviación',          sec:1, v:d=>d._desviacion!=null?(Math.round(d._desviacion*100)>0?'+':'')+Math.round(d._desviacion*100)+'%':'', center:true, w:12},
+      {label:'% MACTI',             sec:1, v:d=>d._macti!=null?d._macti.toFixed(2)+'%':'',                                                         center:true, w:10},
+    ];
+
+    const thinBorder = {top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}};
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Portafolio');
+    ws.columns = COLS.map(col => ({width: col.w || 16}));
+
+    // Fila 1 — encabezados de sección
+    const r1 = ws.addRow(COLS.map((col, i) => SEC.find(s=>s.start===i)?.label || ''));
+    r1.height = 30;
+    r1.eachCell({includeEmpty:true}, (cell, cn) => {
+      const sec = SEC.find(s => (cn-1) >= s.start && (cn-1) <= s.end) || SEC[0];
+      cell.fill      = {type:'pattern', pattern:'solid', fgColor:{argb:sec.bg}};
+      cell.font      = {name:'Calibri', bold:true, size:12, color:{argb:'FFFFFFFF'}};
+      cell.alignment = {horizontal:'center', vertical:'middle', wrapText:true};
+      cell.border    = thinBorder;
     });
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:9}},{s:{r:0,c:10},e:{r:0,c:19}},{s:{r:0,c:20},e:{r:0,c:28}},{s:{r:0,c:29},e:{r:0,c:35}},{s:{r:0,c:36},e:{r:0,c:42}},{s:{r:0,c:43},e:{r:0,c:46}}];
-    ws['!cols']=[{wch:20},{wch:14},{wch:12},{wch:41},{wch:16},{wch:15},{wch:12},{wch:21},{wch:24},{wch:14},{wch:13},{wch:20},{wch:23},{wch:14},{wch:25},{wch:19},{wch:19},{wch:21},{wch:25},{wch:20},{wch:17},{wch:25},{wch:27},{wch:26},{wch:19},{wch:17},{wch:19},{wch:26},{wch:19},{wch:26},{wch:34},{wch:35},{wch:45},{wch:40},{wch:23},{wch:29},{wch:27},{wch:13},{wch:13},{wch:13},{wch:13},{wch:13},{wch:13},{wch:17},{wch:26},{wch:21},{wch:27},{wch:19}];
-    ws['!rows']=[{hpt:33.6},{hpt:32.1}];
-    XLSX.utils.book_append_sheet(wb,ws,'Tracker');
-    XLSX.writeFile(wb,`MSR_R_Portafolio_${new Date().toISOString().slice(0,10)}.xlsx`,{cellStyles:true});
+    SEC.forEach(sec => { ws.mergeCells(1, sec.start+1, 1, sec.end+1); });
+
+    // Fila 2 — nombres de columna
+    const r2 = ws.addRow(COLS.map(col => col.label));
+    r2.height = 26;
+    r2.eachCell({includeEmpty:true}, (cell, cn) => {
+      const sec = SEC.find(s => (cn-1) >= s.start && (cn-1) <= s.end) || SEC[0];
+      cell.fill      = {type:'pattern', pattern:'solid', fgColor:{argb:sec.sub}};
+      cell.font      = {name:'Calibri', bold:true, size:10, color:{argb:'FFFFFFFF'}};
+      cell.alignment = {horizontal:'center', vertical:'middle', wrapText:true};
+      cell.border    = thinBorder;
+    });
+
+    // Filas de datos
+    FILTERED.forEach(d => {
+      const dataRow = ws.addRow(COLS.map(col => col.v(d)));
+      dataRow.height = 18;
+      dataRow.eachCell({includeEmpty:true}, (cell, cn) => {
+        const col = COLS[cn-1];
+        cell.font   = {name:'Calibri', size:10};
+        cell.border = thinBorder;
+        if (col.num) {
+          cell.numFmt    = '"$"#,##0.00';
+          cell.alignment = {horizontal:'right', vertical:'middle'};
+        } else if (col.center) {
+          cell.alignment = {horizontal:'center', vertical:'middle'};
+        } else {
+          cell.alignment = {horizontal:'left', vertical:'middle'};
+        }
+      });
+    });
+
+    ws.views = [{state:'frozen', ySplit:2}];
+
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Portafolio_TI_${new Date().toISOString().slice(0,10)}.xlsx`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+
+    } catch(err) {
+      alert('Error al exportar: ' + err.message);
+      console.error(err);
+    }
   },
 };
