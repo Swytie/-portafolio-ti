@@ -253,6 +253,8 @@ body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--t
 .table-title { font-size: 13px; font-weight: 600; }
 .table-count { font-size: 11px; background: var(--p-pale); color: var(--p); padding: 2px 10px; border-radius: 20px; font-weight: 500; }
 .table-scroll { overflow-x: auto; max-height: 420px; overflow-y: auto; }
+.table-scroll-top { overflow-x: auto; overflow-y: hidden; height: 14px; }
+.table-scroll-top-inner { height: 1px; }
 
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th { font-size: 10px; font-weight: 600; color: var(--t3); text-transform: uppercase; letter-spacing: .4px; padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; background: var(--bg); position: sticky; top: 0; white-space: nowrap; }
@@ -321,6 +323,7 @@ tr:hover td { background: var(--p-pale); }
 }
 .tbl-filter-bar { padding: .5rem 1rem; border-bottom: 1px solid var(--border); background: var(--bg); }
 .tbl-filter-inner { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tbl-fsel-label { font-size: 11px; color: var(--t3); margin-left: 4px; }
 .tbl-fsel { font-size: 11px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--t1); font-family: inherit; cursor: pointer; }
 .tbl-fsel:focus { outline: none; border-color: var(--p); }
 .tbl-clear-btn { font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--t2); font-family: inherit; cursor: pointer; display: flex; align-items: center; gap: 4px; transition: border-color .2s; }
