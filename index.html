@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="estilos.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs/dist/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
   .splash {
@@ -194,6 +195,7 @@
   </div>
   <div class="header-right">
     <span id="last-update" class="last-update"></span>
+    <span id="next-update" class="last-update"></span>
     <button class="btn-outline" id="btn-auto" onclick="App.connectSharePoint()">
       <i class="ti ti-refresh" aria-hidden="true"></i> Conectar SharePoint
     </button>
