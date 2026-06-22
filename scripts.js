@@ -7,16 +7,52 @@ const STATUS_COLORS = {
   'Inicio':'#A889AB','N/A':'#A889AB','-':'#A889AB','':'#A889AB'
 };
 
+// Texto sin mayúsculas ni acentos, para comparar valores que los PMs pueden escribir distinto
+// (ej. "APROBADO" / "Aprobado" / "aprobado" / "Aprobación" con o sin acento) sin perder el texto original para mostrar.
+const foldText = s => String(s||'').trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu,'');
+const stripNumPrefix = s => String(s||'').replace(/^(\d+|N\/A)\s*/i,'').trim();
+const includesFold = (haystack, needle) => foldText(haystack).includes(foldText(needle));
+const foldEq = (a,b) => foldText(a) === foldText(b);
+const foldEquals = (a,b) => foldText(stripNumPrefix(a)) === foldText(stripNumPrefix(b));
+// Quita valores "duplicados" que solo difieren en mayúsculas/acentos, conservando la primera forma de escritura.
+const uniqueFold = arr => {
+  const seen = new Set();
+  const out = [];
+  arr.forEach(v => {
+    const f = foldText(v);
+    if (!seen.has(f)) { seen.add(f); out.push(v); }
+  });
+  return out;
+};
+const orderIndexOf = (value, orderList) => {
+  const target = foldText(stripNumPrefix(value));
+  const idx = orderList.findIndex(item => foldText(stripNumPrefix(item)) === target);
+  return idx === -1 ? 999 : idx;
+};
+// Agrupa por texto "normalizado" (sin mayúsculas/acentos) pero conserva la primera forma de escritura encontrada para mostrarla.
+const groupByFold = (arr, keyFn) => {
+  const map = {};
+  arr.forEach(item => {
+    const raw = keyFn(item) || 'Sin dato';
+    const fold = foldText(raw);
+    if (!map[fold]) map[fold] = {label: raw, count: 0};
+    map[fold].count++;
+  });
+  return Object.values(map);
+};
+const colorForFold = (label, colorMap, fallback) => {
+  const fold = foldText(label);
+  const key = Object.keys(colorMap).find(k => foldText(k) === fold);
+  return key ? colorMap[key] : fallback;
+};
+
 // Orden oficial de fases y estados (ver guía de catálogo del portafolio)
 const FASE_ORDER = ['Inicio','Planeación','Ejecución','Cierre'];
 const ESTADO_ORDER = ['Parametrización','En aprobación','Iniciativa (RPP)','Inicio','Planeación','Ejecución','Cierre','En proceso de cierre','Cerrado','Cancelado','Activo'];
 const sortByOrder = (arr, orderList) => {
-  const norm = s => String(s||'').replace(/^(\d+|N\/A)\s*/i,'').trim();
   return [...arr].sort((a,b) => {
-    const ia = orderList.indexOf(norm(a));
-    const ib = orderList.indexOf(norm(b));
-    const ra = ia === -1 ? 999 : ia;
-    const rb = ib === -1 ? 999 : ib;
+    const ra = orderIndexOf(a, orderList);
+    const rb = orderIndexOf(b, orderList);
     if (ra !== rb) return ra - rb;
     return String(a).localeCompare(String(b));
   });
@@ -57,7 +93,7 @@ const normalizeTipoProy = v => {
   return s;
 };
 const badgeClass = e => {
-  const s = (e||'').toLowerCase();
+  const s = foldText(e);
   if (s.includes('ejec')) return 'b-ejec';
   if (s.includes('plan')) return 'b-plan';
   if (s.includes('cierr')||s.includes('cerr')) return 'b-cierre';
@@ -76,16 +112,14 @@ const isGoLiveOverdue = d => {
   const v = d._fecha_golive;
   if (!v || v === '' || v === 'nan' || v === '-') return false;
   const s = String(v);
-  if (s.toUpperCase().includes('INICIATIVA') || s.toUpperCase().includes('TBD')) return false;
+  if (includesFold(s,'INICIATIVA') || includesFold(s,'TBD')) return false;
   let date;
   if (!isNaN(v) && Number(v) > 1000) date = excelDateToJS(v);
   else { date = new Date(v); if (isNaN(date.getTime())) return false; }
   const today = new Date(); today.setHours(0,0,0,0);
   if (date >= today) return false;
-  const fase = (d._fase || '').toLowerCase();
-  const estado = (d._estado || '').toLowerCase();
-  if (estado.includes('cancel')) return false;
-  return !fase.includes('cierr') && !fase.includes('cerr');
+  if (includesFold(d._estado,'cancel')) return false;
+  return !includesFold(d._fase,'cierr') && !includesFold(d._fase,'cerr');
 };
 
 const App = {
@@ -215,7 +249,7 @@ const App = {
     const raw = XLSX.utils.sheet_to_json(wb.Sheets[sheet], {header:1, defval:''});
     let hdr = -1;
     for (let i = 0; i < raw.length; i++) {
-      if (raw[i].some(c => String(c).includes('Tipo de') || String(c).includes('Nombre del') || String(c).includes('Esfuerzo'))) { hdr = i; break; }
+      if (raw[i].some(c => includesFold(c,'Tipo de') || includesFold(c,'Nombre del') || includesFold(c,'Esfuerzo'))) { hdr = i; break; }
     }
     if (hdr < 0) return;
     const hdrs = raw[hdr];
@@ -226,12 +260,12 @@ const App = {
     for (let i = hdr+1; i < raw.length; i++) {
       const row = raw[i];
       const tipo = String(row[tipoCol]||'').trim();
-      if (!tipo || tipo === 'nan' || SKIP.includes(tipo)) continue;
+      if (!tipo || tipo === 'nan' || SKIP.some(s => foldText(s) === foldText(tipo))) continue;
       const obj = {pm: sheet, tipo};
       hdrs.forEach((h,idx) => { obj[String(h).trim()] = row[idx] ?? ''; });
       const find = (...keys) => {
         for (const k of keys) {
-          const h = hdrs.find(h => String(h).toLowerCase().includes(k.toLowerCase()));
+          const h = hdrs.find(h => includesFold(h, k));
           if (h !== undefined) return obj[String(h).trim()];
         }
         return '';
@@ -260,7 +294,7 @@ const App = {
       obj._pm_gestor    = cleanStr(find('PM / Gestor','PM/Gestor'));
       obj._ruta_critica = cleanStr(find('Ruta Crítica','RUTA CRÍTICA'));
       obj._tipo_servicio= cleanStr(find('Tipo de Servicio'));
-      obj._es_iniciativa = String(obj._fecha_golive||'').toUpperCase().includes('INICIATIVA');
+      obj._es_iniciativa = includesFold(obj._fecha_golive,'INICIATIVA');
       obj._tiene_rrpp    = obj._rrpp && obj._rrpp !== '-' && obj._rrpp !== '' && obj._rrpp !== 'nan';
       const cleanId     = obj._id && obj._id !== '-' && obj._id !== '' && obj._id !== 'nan' ? obj._id : null;
       const cleanNombre = obj._nombre.toLowerCase();
@@ -289,8 +323,8 @@ const App = {
       if (!$('f-pm')) { App.showTab('general'); return; }
       const pmSel = $('f-pm').value, unidadSel = $('f-unidad').value, tipoProySel = $('f-tipo-proy').value;
       const pms = [...new Set(ALL.map(d=>d.pm))];
-      const unidades = [...new Set(ALL.map(d=>d._unidad).filter(Boolean))].sort();
-      const tipoProy = [...new Set(ALL.map(d=>d._tipo_proy).filter(Boolean))].sort();
+      const unidades = uniqueFold(ALL.map(d=>d._unidad).filter(Boolean)).sort();
+      const tipoProy = uniqueFold(ALL.map(d=>d._tipo_proy).filter(Boolean)).sort();
       $('f-pm').innerHTML = '<option value="">Todos los PMs</option>' + pms.map(p=>`<option ${p===pmSel?'selected':''}>${p}</option>`).join('');
       $('f-unidad').innerHTML = '<option value="">Todas las unidades</option>' + unidades.map(u=>`<option ${u===unidadSel?'selected':''}>${u}</option>`).join('');
       $('f-tipo-proy').innerHTML = '<option value="">Todas las categorías</option>' + tipoProy.map(t=>`<option ${t===tipoProySel?'selected':''}>${t}</option>`).join('');
@@ -399,8 +433,8 @@ const App = {
         <div class="table-scroll" id="tbl-scroll"><div id="tbl"></div></div>
       </div>`;
     const pms = [...new Set(ALL.map(d => d.pm))];
-    const unidades = [...new Set(ALL.map(d => d._unidad).filter(Boolean))].sort();
-    const tipoProy = [...new Set(ALL.map(d => d._tipo_proy).filter(Boolean))].sort();
+    const unidades = uniqueFold(ALL.map(d => d._unidad).filter(Boolean)).sort();
+    const tipoProy = uniqueFold(ALL.map(d => d._tipo_proy).filter(Boolean)).sort();
     $('f-pm').innerHTML = '<option value="">Todos los PMs</option>' + pms.map(p => `<option>${p}</option>`).join('');
     $('f-unidad').innerHTML = '<option value="">Todas las unidades</option>' + unidades.map(u => `<option>${u}</option>`).join('');
     $('f-tipo-proy').innerHTML = '<option value="">Todas las categorías</option>' + tipoProy.map(t => `<option>${t}</option>`).join('');
@@ -416,11 +450,11 @@ const App = {
     const estado = $('f-estado').value;
     FILTERED = ALL.filter(d => {
       if (pm       && d.pm !== pm) return false;
-      if (tipo     && !d.tipo.toLowerCase().startsWith(tipo.toLowerCase())) return false;
-      if (tipoProy && d._tipo_proy !== tipoProy) return false;
-      if (fase     && d._fase !== fase) return false;
-      if (unidad   && d._unidad !== unidad) return false;
-      if (estado   && d._estado !== estado) return false;
+      if (tipo     && !includesFold(d.tipo, tipo)) return false;
+      if (tipoProy && !foldEq(d._tipo_proy, tipoProy)) return false;
+      if (fase     && !foldEquals(d._fase, fase)) return false;
+      if (unidad   && !foldEq(d._unidad, unidad)) return false;
+      if (estado   && !foldEquals(d._estado, estado)) return false;
       return true;
     });
     App.renderKPIs(FILTERED);
@@ -436,10 +470,10 @@ const App = {
   },
 
   renderTblFilters(data) {
-  const unidades = [...new Set(data.map(d=>d._unidad).filter(Boolean))].sort();
-  const estados  = sortByOrder([...new Set(data.map(d=>d._estado).filter(Boolean))], ESTADO_ORDER);
-  const fases    = sortByOrder([...new Set(data.map(d=>d._fase).filter(Boolean))], FASE_ORDER);
-  const tipos    = [...new Set(data.map(d=>d._tipo_proy).filter(Boolean))].sort();
+  const unidades = uniqueFold(data.map(d=>d._unidad).filter(Boolean)).sort();
+  const estados  = sortByOrder(uniqueFold(data.map(d=>d._estado).filter(Boolean)), ESTADO_ORDER);
+  const fases    = sortByOrder(uniqueFold(data.map(d=>d._fase).filter(Boolean)), FASE_ORDER);
+  const tipos    = uniqueFold(data.map(d=>d._tipo_proy).filter(Boolean)).sort();
   const pms      = [...new Set(data.map(d=>d.pm).filter(Boolean))];
   const sel = (id, opts, label) => `
     <select class="tbl-fsel" id="tf-${id}" onchange="App.onTblFilter('${id}',this.value)">
@@ -499,10 +533,10 @@ const App = {
   applyTblFilters(data) {
     return data.filter(d => {
       if (TBL_FILTERS.pm     && d.pm !== TBL_FILTERS.pm) return false;
-      if (TBL_FILTERS.tipo   && d._tipo_proy !== TBL_FILTERS.tipo) return false;
-      if (TBL_FILTERS.fase   && d._fase !== TBL_FILTERS.fase) return false;
-      if (TBL_FILTERS.unidad && d._unidad !== TBL_FILTERS.unidad) return false;
-      if (TBL_FILTERS.estado && d._estado !== TBL_FILTERS.estado) return false;
+      if (TBL_FILTERS.tipo   && !foldEq(d._tipo_proy, TBL_FILTERS.tipo)) return false;
+      if (TBL_FILTERS.fase   && !foldEquals(d._fase, TBL_FILTERS.fase)) return false;
+      if (TBL_FILTERS.unidad && !foldEq(d._unidad, TBL_FILTERS.unidad)) return false;
+      if (TBL_FILTERS.estado && !foldEquals(d._estado, TBL_FILTERS.estado)) return false;
       return true;
     });
   },
@@ -528,10 +562,10 @@ const App = {
   },
 
   renderStatusGrid(data) {
-    const activos    = data.filter(d=>['Activo','Ejecución'].some(s=>d._estado.includes(s))).length;
-    const cerrados   = data.filter(d=>['Cierre','Cancelado'].some(s=>d._estado.includes(s))).length;
-    const detenidos  = data.filter(d=>d._estado.includes('En aprobación')).length;
-    const sinInic    = data.filter(d=>d._fase.includes('01') || d._estado.includes('Inicio')).length;
+    const activos    = data.filter(d=>['Activo','Ejecución'].some(s=>includesFold(d._estado,s))).length;
+    const cerrados   = data.filter(d=>['Cierre','Cancelado'].some(s=>includesFold(d._estado,s))).length;
+    const detenidos  = data.filter(d=>includesFold(d._estado,'En aprobación')).length;
+    const sinInic    = data.filter(d=>(d._fase||'').includes('01') || includesFold(d._estado,'Inicio')).length;
     const conRRPP    = data.filter(d=>d._tiene_rrpp).length;
     const iniciativas= data.filter(d=>d._es_iniciativa).length;
     $('status-grid').innerHTML = `
@@ -571,28 +605,27 @@ const App = {
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
         scales:{x:{ticks:{font:{size:10}}}, y:{ticks:{callback:v=>fmt(v),font:{size:9}}}}}
     });
-    const est = {};
-    data.forEach(d=>{const e=d._estado||'Sin estado'; est[e]=(est[e]||0)+1;});
-    const eK = Object.keys(est).filter(k=>est[k]>0);
+    const estGroups = groupByFold(data, d=>d._estado||'Sin estado');
+    const eK = estGroups.map(g=>g.label);
     App.upsertChart('estado','ch-estado', {
       type:'doughnut',
-      data:{labels:eK, datasets:[{data:eK.map(k=>est[k]), backgroundColor:eK.map(k=>STATUS_COLORS[k]||'#A889AB'), borderWidth:0}]},
+      data:{labels:eK, datasets:[{data:estGroups.map(g=>g.count), backgroundColor:eK.map(k=>colorForFold(k,STATUS_COLORS,'#A889AB')), borderWidth:0}]},
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'bottom',labels:{font:{size:9},boxWidth:8}}}}
     });
     const tip = {};
-    data.forEach(d=>{const t=(d._tipo_proy||'').toLowerCase().includes('estrateg')?'Estratégico':'RyR'; tip[t]=(tip[t]||0)+1;});
+    const TIP_COLORS = {'Estratégico':'#803F85','RyR':'#1A9E6A','Sin tipo':'#A889AB'};
+    data.forEach(d=>{const t=d._tipo_proy==='RyR'?'RyR':d._tipo_proy?'Estratégico':'Sin tipo'; tip[t]=(tip[t]||0)+1;});
     const tK = Object.keys(tip);
     App.upsertChart('tipo','ch-tipo', {
       type:'doughnut',
-      data:{labels:tK, datasets:[{data:tK.map(k=>tip[k]), backgroundColor:['#803F85','#1A9E6A'], borderWidth:0}]},
+      data:{labels:tK, datasets:[{data:tK.map(k=>tip[k]), backgroundColor:tK.map(k=>TIP_COLORS[k]), borderWidth:0}]},
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'bottom',labels:{font:{size:9},boxWidth:8}}}}
     });
-    const fases = {};
-    data.forEach(d=>{const f=d._fase||'Sin fase'; fases[f]=(fases[f]||0)+1;});
-    const fK = Object.keys(fases).sort();
+    const faseGroups = groupByFold(data, d=>d._fase||'Sin fase').sort((a,b)=>a.label.localeCompare(b.label));
+    const fK = faseGroups.map(g=>g.label);
     App.upsertChart('fase','ch-fase', {
       type:'bar',
-      data:{labels:fK, datasets:[{data:fK.map(k=>fases[k]), backgroundColor:'#803F85', borderRadius:4}]},
+      data:{labels:fK, datasets:[{data:faseGroups.map(g=>g.count), backgroundColor:'#803F85', borderRadius:4}]},
       options:{indexAxis:'y', responsive:true, maintainAspectRatio:false,
         plugins:{legend:{display:false}},
         scales:{x:{ticks:{font:{size:9}}}, y:{ticks:{font:{size:10}}}}}
@@ -699,20 +732,18 @@ const App = {
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
         scales:{x:{ticks:{font:{size:9},maxRotation:30}}, y:{ticks:{callback:v=>fmt(v),font:{size:9}}}}}
     });
-    const est = {};
-    data.forEach(d=>{const e=d._estado||'Sin estado'; est[e]=(est[e]||0)+1;});
-    const eK = Object.keys(est).filter(k=>est[k]>0);
+    const estGroups = groupByFold(data, d=>d._estado||'Sin estado');
+    const eK = estGroups.map(g=>g.label);
     App.upsertChart('estado','ch-estado', {
       type:'doughnut',
-      data:{labels:eK, datasets:[{data:eK.map(k=>est[k]), backgroundColor:eK.map(k=>STATUS_COLORS[k]||'#A889AB'), borderWidth:0}]},
+      data:{labels:eK, datasets:[{data:estGroups.map(g=>g.count), backgroundColor:eK.map(k=>colorForFold(k,STATUS_COLORS,'#A889AB')), borderWidth:0}]},
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'bottom',labels:{font:{size:9},boxWidth:8}}}}
     });
-    const fases = {};
-    data.forEach(d=>{const f=d._fase||'Sin fase'; fases[f]=(fases[f]||0)+1;});
-    const fK = Object.keys(fases).filter(k=>fases[k]>0);
+    const faseGroups = groupByFold(data, d=>d._fase||'Sin fase');
+    const fK = faseGroups.map(g=>g.label);
     App.upsertChart('tipo','ch-tipo', {
       type:'doughnut',
-      data:{labels:fK, datasets:[{data:fK.map(k=>fases[k]), backgroundColor:PM_COLORS, borderWidth:0}]},
+      data:{labels:fK, datasets:[{data:faseGroups.map(g=>g.count), backgroundColor:PM_COLORS, borderWidth:0}]},
       options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'bottom',labels:{font:{size:9},boxWidth:8}}}}
     });
   },
@@ -724,9 +755,9 @@ const App = {
   },
 
   renderTable(data) {
-  const search = SEARCH.toLowerCase();
+  const search = foldText(SEARCH);
   const visible = search
-    ? data.filter(d => d._nombre.toLowerCase().includes(search) || (d._unidad||'').toLowerCase().includes(search) || d.pm.toLowerCase().includes(search))
+    ? data.filter(d => includesFold(d._nombre,search) || includesFold(d._unidad,search) || includesFold(d.pm,search))
     : data;
   $('tbl-count').textContent = visible.length + ' registros';
   if (!visible.length) {
@@ -734,14 +765,11 @@ const App = {
     return;
   }
   const ORDER_MAP = {_estado: ESTADO_ORDER, _fase: FASE_ORDER};
-  const normOrder = s => String(s||'').replace(/^(\d+|N\/A)\s*/i,'').trim();
   const sorted = [...visible].sort((a,b) => {
     const orderList = ORDER_MAP[SORT_COL];
     if (orderList) {
-      const ia = orderList.indexOf(normOrder(a[SORT_COL]));
-      const ib = orderList.indexOf(normOrder(b[SORT_COL]));
-      const ra = ia === -1 ? 999 : ia;
-      const rb = ib === -1 ? 999 : ib;
+      const ra = orderIndexOf(a[SORT_COL], orderList);
+      const rb = orderIndexOf(b[SORT_COL], orderList);
       if (ra !== rb) return (ra - rb) * SORT_DIR;
       return String(a[SORT_COL]||'').localeCompare(String(b[SORT_COL]||'')) * SORT_DIR;
     }
@@ -780,7 +808,7 @@ const App = {
   const fmtFecha = v => {
     if (!v || v === '' || v === 'nan' || v === '-') return '—';
     const s = String(v);
-    if (s.toUpperCase().includes('INICIATIVA') || s.toUpperCase().includes('TBD')) {
+    if (includesFold(s,'INICIATIVA') || includesFold(s,'TBD')) {
       return `<span style="font-size:10px;background:#F3EAF4;color:#803F85;padding:2px 6px;border-radius:4px">Iniciativa</span>`;
     }
     if (!isNaN(v) && Number(v) > 1000) {
@@ -860,7 +888,7 @@ const App = {
     const fmtDate = v => {
       if (!v || v==='' || v==='nan' || v==='-') return '';
       const s = String(v);
-      if (s.toUpperCase().includes('INICIATIVA')||s.toUpperCase().includes('TBD')) return s;
+      if (includesFold(s,'INICIATIVA')||includesFold(s,'TBD')) return s;
       if (!isNaN(v) && Number(v)>1000) {
         const d = new Date(Math.round((Number(v)-25569)*86400*1000)+new Date().getTimezoneOffset()*60*1000);
         return d.toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'});
