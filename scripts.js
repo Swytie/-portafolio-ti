@@ -50,6 +50,12 @@ const toNum = v => {
   const n = parseFloat(String(v).replace(/[,$\s%]/g,''));
   return isNaN(n) ? 0 : n;
 };
+const normalizeTipoProy = v => {
+  const s = String(v||'').trim();
+  if (/^ryr$/i.test(s)) return 'RyR';
+  if (/^estrat[ée]gico$/i.test(s)) return 'Estratégico';
+  return s;
+};
 const badgeClass = e => {
   const s = (e||'').toLowerCase();
   if (s.includes('ejec')) return 'b-ejec';
@@ -234,7 +240,7 @@ const App = {
       obj._unidad       = cleanStr(find('Unidades a desplegar','Unidad'));
       obj._fase         = cleanStr(find('Fase actual','Fase'));
       obj._estado       = cleanStr(find('Estado','Estatus'));
-      obj._tipo_proy    = cleanStr(find('Tipo de Proyecto','Tipo de proyecto'));
+      obj._tipo_proy    = normalizeTipoProy(cleanStr(find('Tipo de Proyecto','Tipo de proyecto')));
       obj._pct          = toNum(find('% real','% Real','%Real'));
       obj._pct_plan     = toNum(find('% planeado','% Planeado'));
       obj._desviacion   = obj._pct - obj._pct_plan;
@@ -281,11 +287,13 @@ const App = {
     LAST_VIEW_HASH = hash;
     if (CURRENT_TAB === 'general') {
       if (!$('f-pm')) { App.showTab('general'); return; }
-      const pmSel = $('f-pm').value, unidadSel = $('f-unidad').value;
+      const pmSel = $('f-pm').value, unidadSel = $('f-unidad').value, tipoProySel = $('f-tipo-proy').value;
       const pms = [...new Set(ALL.map(d=>d.pm))];
       const unidades = [...new Set(ALL.map(d=>d._unidad).filter(Boolean))].sort();
+      const tipoProy = [...new Set(ALL.map(d=>d._tipo_proy).filter(Boolean))].sort();
       $('f-pm').innerHTML = '<option value="">Todos los PMs</option>' + pms.map(p=>`<option ${p===pmSel?'selected':''}>${p}</option>`).join('');
       $('f-unidad').innerHTML = '<option value="">Todas las unidades</option>' + unidades.map(u=>`<option ${u===unidadSel?'selected':''}>${u}</option>`).join('');
+      $('f-tipo-proy').innerHTML = '<option value="">Todas las categorías</option>' + tipoProy.map(t=>`<option ${t===tipoProySel?'selected':''}>${t}</option>`).join('');
       App.filterGeneral();
     } else if (ALL.some(d=>d.pm===CURRENT_TAB)) {
       App.destroyCharts();
@@ -334,6 +342,7 @@ const App = {
         <select class="fsel" id="f-tipo" onchange="App.filterGeneral()">
           <option value="">Todos los tipos</option><option>Proyecto</option><option>Backlog</option>
         </select>
+        <select class="fsel" id="f-tipo-proy" onchange="App.filterGeneral()"><option value="">Todas las categorías</option></select>
         <select class="fsel" id="f-fase" onchange="App.filterGeneral()">
           <option value="">Todas las fases</option>
           <option>01 Inicio</option><option>02 Planeación</option><option>03 Ejecución</option><option>05 Cierre</option>
@@ -391,23 +400,27 @@ const App = {
       </div>`;
     const pms = [...new Set(ALL.map(d => d.pm))];
     const unidades = [...new Set(ALL.map(d => d._unidad).filter(Boolean))].sort();
+    const tipoProy = [...new Set(ALL.map(d => d._tipo_proy).filter(Boolean))].sort();
     $('f-pm').innerHTML = '<option value="">Todos los PMs</option>' + pms.map(p => `<option>${p}</option>`).join('');
     $('f-unidad').innerHTML = '<option value="">Todas las unidades</option>' + unidades.map(u => `<option>${u}</option>`).join('');
+    $('f-tipo-proy').innerHTML = '<option value="">Todas las categorías</option>' + tipoProy.map(t => `<option>${t}</option>`).join('');
     App.filterGeneral();
   },
 
   filterGeneral() {
-    const pm     = $('f-pm').value;
-    const tipo   = $('f-tipo').value;
-    const fase   = $('f-fase').value;
-    const unidad = $('f-unidad').value;
+    const pm       = $('f-pm').value;
+    const tipo     = $('f-tipo').value;
+    const tipoProy = $('f-tipo-proy').value;
+    const fase     = $('f-fase').value;
+    const unidad   = $('f-unidad').value;
     const estado = $('f-estado').value;
     FILTERED = ALL.filter(d => {
-      if (pm     && d.pm !== pm) return false;
-      if (tipo   && !d.tipo.toLowerCase().startsWith(tipo.toLowerCase())) return false;
-      if (fase   && d._fase !== fase) return false;
-      if (unidad && d._unidad !== unidad) return false;
-      if (estado && d._estado !== estado) return false;
+      if (pm       && d.pm !== pm) return false;
+      if (tipo     && !d.tipo.toLowerCase().startsWith(tipo.toLowerCase())) return false;
+      if (tipoProy && d._tipo_proy !== tipoProy) return false;
+      if (fase     && d._fase !== fase) return false;
+      if (unidad   && d._unidad !== unidad) return false;
+      if (estado   && d._estado !== estado) return false;
       return true;
     });
     App.renderKPIs(FILTERED);
